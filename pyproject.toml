@@ -81,7 +81,12 @@ where = ["."]
 include = ["nyuwaymcpsandbox*"]
 
 [tool.setuptools.package-data]
-nyuwaymcpsandbox = ["detection/builtin/*.yaml", "detection/builtin/*.yml"]
+nyuwaymcpsandbox = [
+    "detection/builtin/*.yaml",
+    "detection/builtin/*.yml",
+    "drivers/prompts/*.yaml",
+    "drivers/prompts/*.yml",
+]
 
 [tool.ruff]
 line-length = 100
