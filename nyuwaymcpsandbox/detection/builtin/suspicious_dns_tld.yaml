@@ -1,0 +1,22 @@
+id: suspicious_dns_tld
+title: DNS lookup for a domain on a high-risk TLD
+severity: medium
+weight: 10
+category: exfiltration
+description: |
+  The sandboxed server resolved a domain whose TLD is heavily abused
+  by exfiltration and command-and-control infrastructure: .tk, .gq,
+  .ml, .cf, .xyz, .top, and similar. This alone is informational;
+  combined with an outbound connection to the resolved IP, it
+  becomes a strong exfiltration signal.
+recommendation: |
+  Inspect the resolved domain and any subsequent connection. Free
+  and low-cost TLDs in production tooling are unusual; verify the
+  server's documented integrations include this endpoint.
+detection:
+  events:
+    - type: network.dns_lookup
+      payload:
+        domain: regex:\.(tk|gq|ml|cf|xyz|top|click|loan|work)$
+  threshold:
+    count: 1

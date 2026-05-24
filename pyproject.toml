@@ -80,6 +80,9 @@ addopts = "-v --tb=short"
 where = ["."]
 include = ["nyuwaymcpsandbox*"]
 
+[tool.setuptools.package-data]
+nyuwaymcpsandbox = ["detection/builtin/*.yaml", "detection/builtin/*.yml"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

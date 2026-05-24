@@ -1,0 +1,21 @@
+id: outbound_network_from_tool
+title: Outbound network call triggered by MCP tool invocation
+severity: high
+weight: 25
+category: exfiltration
+description: |
+  An MCP tool invocation triggered an outbound network call. If the
+  server does not declare network egress in its documented capability
+  set, this is a candidate exfiltration vector - the tool may be
+  forwarding inputs, outputs, or credentials to an attacker-controlled
+  endpoint.
+recommendation: |
+  Inspect the destination host and payload in the captured timeline.
+  If the endpoint is not part of the server's declared integrations,
+  treat as a probable exfiltration channel and block deployment.
+detection:
+  events:
+    - type: network.*
+      triggered_by_type: mcp.tool_invocation
+  threshold:
+    count: 1

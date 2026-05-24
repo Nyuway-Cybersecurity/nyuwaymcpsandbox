@@ -1,0 +1,22 @@
+id: file_write_outside_workdir
+title: File write outside the server's working directory
+severity: medium
+weight: 15
+category: file_access
+description: |
+  An MCP tool handler wrote to a path outside the server's working
+  directory or the explicitly granted file capability scope. This
+  often indicates the server is dropping payloads, modifying host
+  config, or persisting state it has no declared right to persist.
+recommendation: |
+  Review the destination path. Writes to /etc, /usr, /var, the user
+  home, or other system paths from an MCP tool should be treated
+  as out-of-scope and blocked unless explicitly documented.
+detection:
+  events:
+    - type: filesystem.write
+      payload:
+        path: regex:^(/etc|/usr|/var|/root|/home|/Users|/private|/Library|C:\\\\Windows|C:\\\\Program)
+      triggered_by_type: mcp.tool_invocation
+  threshold:
+    count: 1

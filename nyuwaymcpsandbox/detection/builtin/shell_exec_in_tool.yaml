@@ -1,0 +1,20 @@
+id: shell_exec_in_tool
+title: Subprocess spawned during MCP tool execution
+severity: high
+weight: 25
+category: code_execution
+description: |
+  An MCP tool handler spawned a subprocess. A server that does not
+  document a process-execution capability has no legitimate reason
+  to fork a shell. This is one of the strongest behavioural
+  indicators of a backdoor or unsanitised command injection.
+recommendation: |
+  Confirm subprocess execution is in the server's documented
+  capability set. If it is not declared, treat the server as a
+  remote-code-execution risk and block deployment.
+detection:
+  events:
+    - type: process.spawn
+      triggered_by_type: mcp.tool_invocation
+  threshold:
+    count: 1
