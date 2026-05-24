@@ -40,11 +40,78 @@ def test_detonate_rejects_invalid_output():
     assert result.exit_code != 0
 
 
-def test_setup_exits_zero_with_instructions():
+def test_setup_docker_unreachable_exits_nonzero(monkeypatch):
+    """setup exits 1 and prints a hint when Docker is not reachable."""
+    import nyuwaymcpsandbox.cli.main as cli_mod
+
+    class _FakeDockerSdk:
+        @staticmethod
+        def from_env():
+            raise OSError("Cannot connect to Docker daemon")
+
+    monkeypatch.setattr(cli_mod, "_docker_sdk_for_setup", lambda: _FakeDockerSdk)
     runner = CliRunner()
     result = runner.invoke(cli, ["setup"])
-    assert result.exit_code == 0
+    assert result.exit_code == 1
     assert "Docker" in result.output
+
+
+def test_setup_pulls_all_images_and_exits_zero(monkeypatch):
+    """setup pulls all three images and exits 0 on success."""
+    import nyuwaymcpsandbox.cli.main as cli_mod
+
+    pulled: list[str] = []
+
+    class _FakeImages:
+        def pull(self, image: str):
+            pulled.append(image)
+
+    class _FakeClient:
+        images = _FakeImages()
+
+        def ping(self):
+            return True
+
+    class _FakeDockerSdk:
+        @staticmethod
+        def from_env():
+            return _FakeClient()
+
+    monkeypatch.setattr(cli_mod, "_docker_sdk_for_setup", lambda: _FakeDockerSdk)
+    runner = CliRunner()
+    result = runner.invoke(cli, ["setup"])
+    assert result.exit_code == 0, result.output
+    assert "python:3.12-slim" in pulled
+    assert "node:20-slim" in pulled
+    assert "nicolaka/netshoot" in pulled
+    assert "Setup complete" in result.output
+
+
+def test_setup_pull_failure_exits_nonzero(monkeypatch):
+    """setup exits 1 when any image pull fails."""
+    import nyuwaymcpsandbox.cli.main as cli_mod
+
+    class _FakeImages:
+        def pull(self, image: str):
+            if image == "nicolaka/netshoot":
+                raise OSError("pull failed: network timeout")
+
+    class _FakeClient:
+        images = _FakeImages()
+
+        def ping(self):
+            return True
+
+    class _FakeDockerSdk:
+        @staticmethod
+        def from_env():
+            return _FakeClient()
+
+    monkeypatch.setattr(cli_mod, "_docker_sdk_for_setup", lambda: _FakeDockerSdk)
+    runner = CliRunner()
+    result = runner.invoke(cli, ["setup"])
+    assert result.exit_code == 1
+    assert "nicolaka/netshoot" in result.output
 
 
 def test_detonate_dry_run_against_tmp_dir_emits_report(tmp_path):

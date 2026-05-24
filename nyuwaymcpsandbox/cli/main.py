@@ -43,6 +43,16 @@ from nyuwaymcpsandbox.sources import (
 SEVERITY_CHOICES = ("low", "medium", "high", "critical")
 
 
+def _docker_sdk_for_setup():
+    """Return the docker SDK module. Extracted so tests can monkeypatch it."""
+    try:
+        import docker as _docker  # type: ignore[import-not-found]
+
+        return _docker
+    except ImportError:
+        return None
+
+
 @click.group()
 @click.version_option(__version__, prog_name="nyuwaymcpsandbox")
 def cli():
@@ -177,12 +187,72 @@ def detonate(
 @cli.command()
 def setup():
     """One-time setup: verify Docker availability and pull base images."""
-    click.echo("nyuwaymcpsandbox setup is pre-release.")
-    click.echo("Required: Docker (Desktop on Windows / native on Linux + macOS).")
-    click.echo("Base images: python:3.12-slim, node:20-slim.")
-    click.echo("Pull them now with:")
-    click.echo("  docker pull python:3.12-slim")
-    click.echo("  docker pull node:20-slim")
+    # Images required by the sandbox. Pull order: smallest first so a
+    # partial run still leaves the most-used images ready.
+    images = [
+        ("python:3.12-slim", "MCP server sandbox (Python servers)"),
+        ("node:20-slim", "MCP server sandbox (Node.js servers)"),
+        ("nicolaka/netshoot", "NetworkMonitor DNS-capture sidecar"),
+    ]
+
+    # Step 1: verify Docker is reachable before attempting any pulls.
+    click.echo("nyuwaymcpsandbox setup")
+    click.echo("=" * 40)
+    click.echo()
+    click.echo("Checking Docker availability...", nl=False)
+    try:
+        docker_sdk = _docker_sdk_for_setup()
+        if docker_sdk is None:
+            raise ImportError("docker-py not installed")
+        client = docker_sdk.from_env()
+        client.ping()
+        click.echo(" OK")
+    except ImportError:
+        click.echo(" FAILED", err=True)
+        click.echo(
+            "Error: docker-py is not installed. Run: pip install docker", err=True
+        )
+        raise SystemExit(1)
+    except Exception as e:
+        click.echo(" FAILED", err=True)
+        click.echo(f"Error: could not connect to Docker daemon: {e}", err=True)
+        click.echo(
+            "Hint: start Docker Desktop (Windows/macOS) or the Docker daemon (Linux).",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    # Step 2: pull each image, reporting progress per image.
+    click.echo()
+    click.echo("Pulling sandbox images (this may take a few minutes on first run)...")
+    click.echo()
+
+    failed: list[str] = []
+    for image, description in images:
+        click.echo(f"  {image}")
+        click.echo(f"    {description}")
+        click.echo(f"    Pulling...", nl=False)
+        try:
+            client.images.pull(image)
+            click.echo(" done")
+        except Exception as e:
+            click.echo(f" FAILED: {e}", err=True)
+            failed.append(image)
+        click.echo()
+
+    # Step 3: summary.
+    if failed:
+        click.echo(f"Setup incomplete. Failed to pull: {', '.join(failed)}", err=True)
+        click.echo("Check your internet connection and Docker daemon logs.", err=True)
+        raise SystemExit(1)
+
+    click.echo("Setup complete. All images are ready.")
+    click.echo()
+    click.echo("Quick start:")
+    click.echo(
+        "  nyuwaymcpsandbox detonate . --mcp-transport subprocess"
+        ' --mcp-command "python server.py"'
+    )
     raise SystemExit(0)
 
 
