@@ -41,6 +41,10 @@ class LlmResponse:
     raw: dict | None = None
 
 
+class LlmBackendError(Exception):
+    """LLM backend construction or chat call failed."""
+
+
 class LlmBackend(Protocol):
     """Minimal contract every LLM provider implementation must satisfy."""
 

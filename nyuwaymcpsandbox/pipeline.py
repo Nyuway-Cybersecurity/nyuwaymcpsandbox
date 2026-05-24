@@ -104,10 +104,27 @@ def _default_mcp_client_factory(container_handle, config, source_path) -> McpCli
 
 
 def _default_llm_backend_factory(model: str | None, api_key: str | None) -> LlmBackend:
-    raise PipelineNotReady(
-        "Real LLM backend is not yet wired. Use --dry-run to exercise the "
-        "pipeline with the in-memory fake."
-    )
+    """Build a real LLM backend via litellm.
+
+    Requires ``--llm <model>``. Examples:
+        --llm claude-sonnet-4-5
+        --llm openai/gpt-4o
+        --llm ollama/llama3
+        --llm local                 (alias for ollama/llama3)
+
+    The provider's API key is picked up automatically from the standard
+    env var (ANTHROPIC_API_KEY / OPENAI_API_KEY / etc) unless --api-key
+    is explicitly passed.
+    """
+    from nyuwaymcpsandbox.drivers.litellm_backend import LiteLlmBackend
+
+    if not model:
+        raise PipelineNotReady(
+            "Real LLM backend needs --llm <model> (e.g. --llm claude-sonnet-4-5 "
+            "or --llm local for Ollama). Use --dry-run to exercise the pipeline "
+            "with the in-memory fake instead."
+        )
+    return LiteLlmBackend(model=model, api_key=api_key)
 
 
 @dataclass

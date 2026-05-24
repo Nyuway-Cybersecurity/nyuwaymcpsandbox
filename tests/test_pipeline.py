@@ -281,8 +281,8 @@ def test_invalid_mcp_transport_raises_value_error():
         run_pipeline(config, deps)
 
 
-def test_default_llm_backend_factory_raises_pipeline_not_ready():
-    """Real LLM backend not wired; Full mode without --dry-run fails clearly."""
+def test_default_llm_backend_factory_without_model_raises_pipeline_not_ready():
+    """Real LLM backend needs --llm; absence produces a clear configuration error."""
     deps = _base_deps(
         llm_backend_factory=PipelineDeps().llm_backend_factory,
         prompts_factory=lambda: [
@@ -296,8 +296,18 @@ def test_default_llm_backend_factory_raises_pipeline_not_ready():
             )
         ],
     )
-    with pytest.raises(PipelineNotReady, match="LLM backend"):
+    with pytest.raises(PipelineNotReady, match="--llm"):
         run_pipeline(_config(mode="full"), deps)
+
+
+def test_default_llm_backend_factory_with_model_builds_litellm_backend():
+    """When --llm is set, the default factory returns a real LiteLlmBackend."""
+    from nyuwaymcpsandbox.drivers.litellm_backend import LiteLlmBackend
+    from nyuwaymcpsandbox.pipeline import _default_llm_backend_factory
+
+    backend = _default_llm_backend_factory(model="claude-sonnet-4-5", api_key="sk-x")
+    assert isinstance(backend, LiteLlmBackend)
+    assert backend.model == "claude-sonnet-4-5"
 
 
 # ── exit_code_for ────────────────────────────────────────────────────────
