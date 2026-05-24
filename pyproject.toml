@@ -87,6 +87,7 @@ nyuwaymcpsandbox = [
     "detection/builtin/*.yml",
     "drivers/prompts/*.yaml",
     "drivers/prompts/*.yml",
+    "sandbox/preload/sitecustomize.py",
 ]
 
 [tool.ruff]
