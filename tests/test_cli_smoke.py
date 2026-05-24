@@ -224,3 +224,98 @@ def test_detonate_invalid_mcp_transport_rejected():
     runner = CliRunner()
     result = runner.invoke(cli, ["detonate", "./x", "--mcp-transport", "telnet", "--dry-run"])
     assert result.exit_code != 0
+
+
+def test_detonate_mcp_arg_tokens_take_precedence_over_mcp_command(tmp_path):
+    """--mcp-arg tokens are used as-is and override --mcp-command when both given."""
+    import sys
+    from pathlib import Path
+
+    fixture = Path(__file__).parent / "fixtures" / "echo_mcp_server.py"
+    runner = CliRunner()
+    # --mcp-arg avoids shlex parsing entirely; even if --mcp-command is also
+    # present, the --mcp-arg tokens win.
+    result = runner.invoke(
+        cli,
+        [
+            "detonate",
+            str(tmp_path),
+            "--mcp-transport",
+            "subprocess",
+            "--mcp-arg",
+            sys.executable,
+            "--mcp-arg",
+            str(fixture),
+            "--mcp-command",
+            "should-be-ignored",
+            "--output",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    import json
+
+    parsed = json.loads(result.output)
+    invocations = [
+        e["payload"]["name"]
+        for e in parsed["timeline"]["events"]
+        if e["type"] == "mcp.tool_invocation"
+    ]
+    assert "echo" in invocations
+
+
+def test_detonate_mcp_arg_alone_works(tmp_path):
+    """--mcp-arg without --mcp-command launches the server correctly."""
+    import sys
+    from pathlib import Path
+
+    fixture = Path(__file__).parent / "fixtures" / "echo_mcp_server.py"
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "detonate",
+            str(tmp_path),
+            "--mcp-transport",
+            "subprocess",
+            "--mcp-arg",
+            sys.executable,
+            "--mcp-arg",
+            str(fixture),
+            "--output",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+
+def test_detonate_mcp_command_fallback_when_no_mcp_arg(tmp_path):
+    """--mcp-command is used when no --mcp-arg tokens are given.
+
+    Uses shlex.join to produce a properly quoted command string so the
+    round-trip through shlex.split is lossless on all platforms.
+    """
+    import shlex
+    import sys
+    from pathlib import Path
+
+    fixture = Path(__file__).parent / "fixtures" / "echo_mcp_server.py"
+    # shlex.join quotes each token so the round-trip through shlex.split
+    # is safe on Linux/macOS. Windows users with backslash paths should
+    # use --mcp-arg instead (which bypasses shlex entirely).
+    command = shlex.join([sys.executable, str(fixture)])
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "detonate",
+            str(tmp_path),
+            "--mcp-transport",
+            "subprocess",
+            "--mcp-command",
+            command,
+            "--output",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output

@@ -110,7 +110,16 @@ def cli():
     "--mcp-command",
     default=None,
     help='Command to launch the MCP server, e.g. "python server.py". '
-    "Parsed with shell quoting. Required unless --dry-run is set.",
+    "Parsed with shell quoting (POSIX rules on Linux/macOS; Windows-aware on Windows). "
+    "Use --mcp-arg for Windows paths with backslashes. Required unless --dry-run is set.",
+)
+@click.option(
+    "--mcp-arg",
+    "mcp_args",
+    multiple=True,
+    help="Alternative to --mcp-command: pass each token as a separate flag. "
+    "Avoids shell-quoting issues with Windows backslash paths. "
+    'Example: --mcp-arg python --mcp-arg "C:\\Users\\me\\server.py"',
 )
 @click.option(
     "--dry-run",
@@ -128,12 +137,26 @@ def detonate(
     allow_network,
     mcp_transport,
     mcp_command,
+    mcp_args,
     dry_run,
 ):
     """Detonate an MCP server in a sandboxed container and record behavior.
 
     TARGET may be a local path, github:owner/repo, npm:package, or pypi:package.
     """
+    # --mcp-arg tokens take precedence over --mcp-command string. When neither
+    # is provided the list is empty and the real transport raises PipelineNotReady.
+    #
+    # Windows note: shlex.split uses POSIX mode which strips backslashes from
+    # native Windows paths (C:\Users\... becomes C:Users\...). Use --mcp-arg
+    # to pass each token separately and bypass shell parsing entirely.
+    if mcp_args:
+        resolved_command = list(mcp_args)
+    elif mcp_command:
+        resolved_command = shlex.split(mcp_command)
+    else:
+        resolved_command = []
+
     config = PipelineConfig(
         target=target,
         mode=mode,
@@ -143,7 +166,7 @@ def detonate(
         llm_model=llm_model,
         allow_network=allow_network,
         mcp_transport=mcp_transport,
-        mcp_command=shlex.split(mcp_command) if mcp_command else [],
+        mcp_command=resolved_command,
     )
 
     deps = PipelineDeps()
@@ -207,12 +230,12 @@ def setup():
         client = docker_sdk.from_env()
         client.ping()
         click.echo(" OK")
-    except ImportError:
+    except ImportError as exc:
         click.echo(" FAILED", err=True)
         click.echo(
             "Error: docker-py is not installed. Run: pip install docker", err=True
         )
-        raise SystemExit(1)
+        raise SystemExit(1) from exc
     except Exception as e:
         click.echo(" FAILED", err=True)
         click.echo(f"Error: could not connect to Docker daemon: {e}", err=True)
@@ -220,7 +243,7 @@ def setup():
             "Hint: start Docker Desktop (Windows/macOS) or the Docker daemon (Linux).",
             err=True,
         )
-        raise SystemExit(1)
+        raise SystemExit(1) from e
 
     # Step 2: pull each image, reporting progress per image.
     click.echo()
@@ -231,7 +254,7 @@ def setup():
     for image, description in images:
         click.echo(f"  {image}")
         click.echo(f"    {description}")
-        click.echo(f"    Pulling...", nl=False)
+        click.echo("    Pulling...", nl=False)
         try:
             client.images.pull(image)
             click.echo(" done")
