@@ -1,0 +1,89 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nyuwaymcpsandbox"
+version = "0.1.0"
+description = "Open-source behavioral sandbox for Model Context Protocol (MCP) servers"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Nyuway AI", email = "security@nyuway.ai" },
+]
+maintainers = [
+    { name = "Nyuway AI", email = "security@nyuway.ai" },
+]
+keywords = [
+    "mcp",
+    "model-context-protocol",
+    "sandbox",
+    "behavioral-analysis",
+    "security",
+    "dynamic-analysis",
+    "ai-security",
+    "llm-security",
+    "agent-security",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
+dependencies = [
+    "click>=8.1",
+    "rich>=13.0",
+    "docker>=7.0",
+    "requests>=2.31",
+    "pyyaml>=6.0",
+    "litellm>=1.40",
+]
+
+[project.urls]
+Homepage = "https://nyuway.ai"
+Documentation = "https://nyuway.ai/mcp-sandbox/docs"
+Repository = "https://github.com/Nyuway-Cybersecurity/nyuwaymcpsandbox"
+"Bug Tracker" = "https://github.com/Nyuway-Cybersecurity/nyuwaymcpsandbox/issues"
+Changelog = "https://github.com/Nyuway-Cybersecurity/nyuwaymcpsandbox/releases"
+
+[project.scripts]
+nyuwaymcpsandbox = "nyuwaymcpsandbox.cli.main:cli"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-v --tb=short"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nyuwaymcpsandbox*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]

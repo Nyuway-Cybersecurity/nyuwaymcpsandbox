@@ -1,0 +1,60 @@
+# Confidential project documents - NEVER commit
+*_project.md
+*_internal.md
+*_confidential.md
+*.key
+*.pem
+.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+.nox/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Tooling
+.ruff_cache/
+.mypy_cache/
+
+# Sandbox runtime artefacts
+*.sandbox-report.json
+nyuway-sandbox-report.*
