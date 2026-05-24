@@ -59,10 +59,114 @@ jobs:
       - name: Run ruff (format check)
         run: ruff format --check nyuwaymcpsandbox/
 
+  integration:
+    name: Integration (Linux + Docker)
+    runs-on: ubuntu-latest
+    needs: [test, lint]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install nyuwaymcpsandbox
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Pull sandbox base images
+        run: |
+          docker pull python:3.12-slim
+          docker pull node:20-slim
+          docker pull nicolaka/netshoot
+
+      # Step 1: dry-run - validates CLI plumbing without any external deps.
+      - name: "Integration: dry-run (no Docker / MCP / LLM)"
+        run: |
+          nyuwaymcpsandbox detonate . --dry-run --output json | python -c "
+          import sys, json
+          r = json.load(sys.stdin)
+          assert r['verdict']['tier'] in ('PASS','LOW','MEDIUM','HIGH','CRITICAL'), 'missing verdict'
+          assert 'timeline' in r, 'missing timeline'
+          print('dry-run: OK - verdict', r['verdict']['tier'])
+          "
+
+      # Step 2: subprocess transport against the in-tree echo fixture.
+      # Validates: real JSON-RPC 2.0 handshake, tools/list, tools/call,
+      # deterministic harness, detection rules, verdict, all output formats.
+      - name: "Integration: subprocess transport + echo fixture (json)"
+        run: |
+          nyuwaymcpsandbox detonate . \
+            --mcp-transport subprocess \
+            --mcp-command "python tests/fixtures/echo_mcp_server.py" \
+            --output json | python -c "
+          import sys, json
+          r = json.load(sys.stdin)
+          tools = [e for e in r['timeline']['events'] if e['type'] == 'mcp.tool_invocation']
+          assert len(tools) >= 2, f'expected >=2 tool invocations, got {len(tools)}'
+          assert r['verdict']['tier'] == 'PASS', f'expected PASS, got {r[\"verdict\"][\"tier\"]}'
+          print(f'subprocess: OK - {len(tools)} tools invoked, verdict PASS')
+          "
+
+      - name: "Integration: subprocess transport + echo fixture (timeline)"
+        run: |
+          nyuwaymcpsandbox detonate . \
+            --mcp-transport subprocess \
+            --mcp-command "python tests/fixtures/echo_mcp_server.py" \
+            --output timeline
+
+      - name: "Integration: subprocess transport + echo fixture (sarif)"
+        run: |
+          nyuwaymcpsandbox detonate . \
+            --mcp-transport subprocess \
+            --mcp-command "python tests/fixtures/echo_mcp_server.py" \
+            --output sarif | python -c "
+          import sys, json
+          s = json.load(sys.stdin)
+          assert s['version'] == '2.1.0', 'bad SARIF version'
+          assert s.get('$' + 'schema', '').startswith('https://'), 'bad SARIF schema'
+          print('sarif: OK - schema valid')
+          "
+
+      # Step 3: docker transport against the echo fixture.
+      # Validates: container orchestration (secure defaults), FilesystemMonitor,
+      # ProcessMonitor, NetworkMonitor, EnvironmentMonitor, DockerExecStdioStream,
+      # full end-to-end pipeline with real Docker on Linux.
+      - name: "Integration: docker transport + echo fixture"
+        run: |
+          nyuwaymcpsandbox detonate . \
+            --mcp-transport docker \
+            --mcp-command "python /src/tests/fixtures/echo_mcp_server.py" \
+            --output json | python -c "
+          import sys, json
+          r = json.load(sys.stdin)
+          types = {e['type'] for e in r['timeline']['events']}
+          assert 'container.started' in types, 'missing container.started'
+          assert 'container.stopped' in types, 'missing container.stopped'
+          assert 'mcp.tool_invocation' in types, 'missing tool invocations'
+          tools = [e for e in r['timeline']['events'] if e['type'] == 'mcp.tool_invocation']
+          assert len(tools) >= 2, f'expected >=2 tool invocations, got {len(tools)}'
+          print(f'docker: OK - container lifecycle confirmed, {len(tools)} tools invoked')
+          "
+
+      # Step 4: --fail-on exit code gate. A clean PASS verdict must exit 0.
+      - name: "Integration: --fail-on high exits 0 on PASS verdict"
+        run: |
+          nyuwaymcpsandbox detonate . \
+            --mcp-transport subprocess \
+            --mcp-command "python tests/fixtures/echo_mcp_server.py" \
+            --fail-on high \
+            --output json > /dev/null
+          echo "exit-code gate: OK - exited 0 on PASS verdict"
+
   build:
     name: Build wheel
     runs-on: ubuntu-latest
-    needs: [test, lint]
+    needs: [test, lint, integration]
 
     steps:
       - uses: actions/checkout@v4
