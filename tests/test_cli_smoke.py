@@ -1,4 +1,11 @@
-"""CLI smoke tests - verify entry point wires correctly."""
+"""CLI smoke tests.
+
+Verify that the CLI entry point wires correctly and that --dry-run
+produces a real end-to-end report. The pipeline itself is tested
+exhaustively in test_pipeline.py.
+"""
+
+import json
 
 from click.testing import CliRunner
 
@@ -21,13 +28,6 @@ def test_cli_help_lists_commands():
     assert "setup" in result.output
 
 
-def test_detonate_stub_exits_nonzero_with_hint():
-    runner = CliRunner()
-    result = runner.invoke(cli, ["detonate", "./some-server"])
-    assert result.exit_code == 2
-    assert "pre-release" in result.output
-
-
 def test_detonate_rejects_invalid_mode():
     runner = CliRunner()
     result = runner.invoke(cli, ["detonate", "./x", "--mode", "warp"])
@@ -40,8 +40,72 @@ def test_detonate_rejects_invalid_output():
     assert result.exit_code != 0
 
 
-def test_setup_stub_exits_nonzero_with_hint():
+def test_setup_exits_zero_with_instructions():
     runner = CliRunner()
     result = runner.invoke(cli, ["setup"])
+    assert result.exit_code == 0
+    assert "Docker" in result.output
+
+
+def test_detonate_dry_run_against_tmp_dir_emits_report(tmp_path):
+    """End-to-end smoke: --dry-run renders a real report with no Docker."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["detonate", str(tmp_path), "--dry-run"])
+    # No findings expected with the empty source dir + stub monitors,
+    # so the verdict is PASS and the exit code is 0.
+    assert result.exit_code == 0, result.output
+    assert "nyuwaymcpsandbox" in result.output
+    assert "PASS" in result.output
+
+
+def test_detonate_dry_run_json_output_parses(tmp_path):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["detonate", str(tmp_path), "--dry-run", "--output", "json"])
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.output)
+    assert parsed["tool"] == "nyuwaymcpsandbox"
+    assert parsed["target"] == str(tmp_path)
+
+
+def test_detonate_dry_run_sarif_output_parses(tmp_path):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["detonate", str(tmp_path), "--dry-run", "--output", "sarif"])
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.output)
+    assert parsed["version"] == "2.1.0"
+
+
+def test_detonate_dry_run_full_mode_runs_llm_driver(tmp_path):
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ["detonate", str(tmp_path), "--dry-run", "--mode", "full", "--output", "json"]
+    )
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.output)
+    types = [e["type"] for e in parsed["timeline"]["events"]]
+    # Full mode adds the LLM driver events.
+    assert "llm.prompt_sent" in types
+
+
+def test_detonate_without_dry_run_reports_not_ready(tmp_path):
+    """Real MCP stdio transport isn't wired yet - the CLI must say so clearly."""
+    runner = CliRunner()
+    # Use a fake source path so source resolution doesn't fail first.
+    result = runner.invoke(cli, ["detonate", str(tmp_path)])
+    # Exit code 2 = configuration / pipeline-not-ready error.
     assert result.exit_code == 2
-    assert "pre-release" in result.output
+    # The user-facing error must mention the workaround.
+    assert "dry-run" in result.output.lower()
+
+
+def test_detonate_unknown_source_prefix_exits_2():
+    runner = CliRunner()
+    result = runner.invoke(cli, ["detonate", "weird:foo/bar", "--dry-run"])
+    assert result.exit_code == 2
+    assert "weird" in result.output
+
+
+def test_detonate_local_path_not_found_exits_2():
+    runner = CliRunner()
+    result = runner.invoke(cli, ["detonate", "/does/not/exist/anywhere", "--dry-run"])
+    assert result.exit_code == 2
