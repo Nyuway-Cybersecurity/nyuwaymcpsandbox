@@ -243,3 +243,34 @@ def test_malicious_server_rule6_fires_via_pipeline(tmp_path):
     assert result.report.verdict.tier != "PASS", (
         f"expected non-PASS verdict, got {result.report.verdict.tier}"
     )
+
+
+# ── FP regression: non-file tools must not trigger sensitive_file_read ───
+
+
+def test_sensitive_file_read_does_not_fire_for_memory_graph_tools():
+    """Regression: create_entities/open_nodes with /etc/passwd as node name
+    must NOT trigger sensitive_file_read.
+
+    Real FP discovered during real-world testing against
+    @modelcontextprotocol/server-memory: Mistral used create_entities with
+    '/etc/passwd' as an entity observation. The rule now requires the tool
+    name to match a file-I/O pattern, eliminating this class of FP.
+    """
+    tl = BehavioralTimeline()
+    # These are exactly the events seen from the memory server FP.
+    for tool_name in ("create_entities", "open_nodes", "search_nodes", "add_observations"):
+        tl.add(
+            _evt(
+                EVT_MCP_TOOL_INVOKE,
+                SRC_MCP_CLIENT,
+                {"name": tool_name, "arguments": {"entities": [{"name": "entity1", "entityType": "file", "observations": ["/etc/passwd"]}]}},
+            )
+        )
+
+    rules = load_builtin_rules()
+    findings = evaluate_rules(rules, tl)
+    fired_ids = {f.rule_id for f in findings}
+    assert "sensitive_file_read" not in fired_ids, (
+        f"sensitive_file_read fired as FP on memory graph tools: {fired_ids}"
+    )
