@@ -52,6 +52,7 @@ from nyuwaymcpsandbox.sources import resolve as resolve_source
 
 VALID_MODES = ("fast", "full")
 VALID_OUTPUTS = ("timeline", "json", "sarif")
+VALID_MCP_TRANSPORTS = ("docker", "subprocess")
 
 
 class PipelineNotReady(Exception):
@@ -63,11 +64,43 @@ def _default_monitors() -> list[Monitor]:
     return [NetworkMonitor(), FilesystemMonitor(), EnvironmentMonitor(), ProcessMonitor()]
 
 
-def _default_mcp_client_factory(container_handle) -> McpClient:
-    raise PipelineNotReady(
-        "Real stdio MCP transport is not yet wired. Use --dry-run to exercise "
-        "the pipeline with the in-memory fake."
-    )
+def _default_mcp_client_factory(container_handle, config, source_path) -> McpClient:
+    """Build a real McpClient for the requested transport.
+
+    docker:     run the MCP server inside the orchestrator's container
+                via ``docker exec``. Real sandbox.
+    subprocess: run the MCP server as a host subprocess (no sandbox).
+                Useful for dev and for protocol validation.
+
+    Either transport requires ``config.mcp_command`` to be set so the
+    factory knows what to start. Otherwise it raises PipelineNotReady
+    with a clear message pointing the operator at --mcp-command.
+    """
+    from nyuwaymcpsandbox.drivers.docker_exec_stream import DockerExecStdioStream
+    from nyuwaymcpsandbox.drivers.stdio_mcp import StdioMcpClient
+    from nyuwaymcpsandbox.drivers.subprocess_stream import SubprocessStdioStream
+
+    command = list(config.mcp_command)
+    if not command:
+        raise PipelineNotReady(
+            "Real MCP transport needs --mcp-command (e.g. --mcp-command 'python server.py'). "
+            "Use --dry-run to exercise the pipeline with the in-memory fake instead."
+        )
+
+    transport = config.mcp_transport
+    if transport == "subprocess":
+        stream = SubprocessStdioStream(command, cwd=source_path)
+        return StdioMcpClient(stream)
+    if transport == "docker":
+        api = getattr(getattr(container_handle.container, "client", None), "api", None)
+        if api is None:
+            raise PipelineNotReady(
+                "Docker MCP transport needs a real docker API on the container handle. "
+                "Use --mcp-transport subprocess or --dry-run for non-Docker runs."
+            )
+        stream = DockerExecStdioStream(api, container_handle.container_id, command)
+        return StdioMcpClient(stream)
+    raise ValueError(f"Unknown mcp_transport: {transport!r}")
 
 
 def _default_llm_backend_factory(model: str | None, api_key: str | None) -> LlmBackend:
@@ -86,7 +119,7 @@ class PipelineDeps:
     monitors_factory: Callable[[], list[Monitor]] = _default_monitors
     rules_factory: Callable[[], list[DetectionRule]] = load_builtin_rules
     prompts_factory: Callable[[], list[AdversarialPrompt]] = load_builtin_prompts
-    mcp_client_factory: Callable[[object], McpClient] = _default_mcp_client_factory
+    mcp_client_factory: Callable[..., McpClient] = _default_mcp_client_factory
     llm_backend_factory: Callable[[str | None, str | None], LlmBackend] = (
         _default_llm_backend_factory
     )
@@ -106,6 +139,13 @@ class PipelineConfig:
     llm_model: str | None = None
     allow_network: bool = False
     command: list[str] = field(default_factory=list)
+    # MCP transport selection. docker = run inside the sandboxed container
+    # via docker exec; subprocess = run as a host subprocess (no sandbox).
+    mcp_transport: str = "docker"
+    # Argv to start the MCP server (e.g. ["python", "server.py"]).
+    # Required by both real transports; empty means rely on the fake
+    # injected by --dry-run.
+    mcp_command: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -146,6 +186,11 @@ def run_pipeline(config: PipelineConfig, deps: PipelineDeps | None = None) -> Pi
         raise ValueError(f"Invalid mode: {config.mode!r}. Expected one of {VALID_MODES}.")
     if config.output not in VALID_OUTPUTS:
         raise ValueError(f"Invalid output: {config.output!r}. Expected one of {VALID_OUTPUTS}.")
+    if config.mcp_transport not in VALID_MCP_TRANSPORTS:
+        raise ValueError(
+            f"Invalid mcp_transport: {config.mcp_transport!r}. "
+            f"Expected one of {VALID_MCP_TRANSPORTS}."
+        )
 
     deps = deps or PipelineDeps()
     scan_start = time.monotonic()
@@ -167,26 +212,38 @@ def run_pipeline(config: PipelineConfig, deps: PipelineDeps | None = None) -> Pi
         ) as container:
             monitors = deps.monitors_factory()
             with monitor_session(monitors, container, timeline, scan_start):
-                mcp = deps.mcp_client_factory(container)
+                mcp = deps.mcp_client_factory(container, config, local_path)
 
-                run_deterministic_harness(
-                    client=mcp,
-                    timeline=timeline,
-                    scan_start=scan_start,
-                    triggered_by=container.started_event_id,
-                )
-
-                if config.mode == "full":
-                    llm = deps.llm_backend_factory(config.llm_model, config.api_key)
-                    prompts = deps.prompts_factory()
-                    run_llm_driver(
-                        llm=llm,
-                        mcp=mcp,
-                        prompts=prompts,
+                try:
+                    run_deterministic_harness(
+                        client=mcp,
                         timeline=timeline,
                         scan_start=scan_start,
                         triggered_by=container.started_event_id,
                     )
+
+                    if config.mode == "full":
+                        llm = deps.llm_backend_factory(config.llm_model, config.api_key)
+                        prompts = deps.prompts_factory()
+                        run_llm_driver(
+                            llm=llm,
+                            mcp=mcp,
+                            prompts=prompts,
+                            timeline=timeline,
+                            scan_start=scan_start,
+                            triggered_by=container.started_event_id,
+                        )
+                finally:
+                    # McpClient is a Protocol that doesn't require close;
+                    # call it when present so subprocess/exec transports
+                    # release their resources before the source tempdir
+                    # is cleaned up.
+                    close_fn = getattr(mcp, "close", None)
+                    if callable(close_fn):
+                        try:
+                            close_fn()
+                        except Exception:
+                            pass
 
     duration = time.monotonic() - scan_start
     rules = deps.rules_factory()

@@ -109,3 +109,51 @@ def test_detonate_local_path_not_found_exits_2():
     runner = CliRunner()
     result = runner.invoke(cli, ["detonate", "/does/not/exist/anywhere", "--dry-run"])
     assert result.exit_code == 2
+
+
+def test_detonate_subprocess_transport_against_real_echo_server(tmp_path):
+    """Real protocol stack end-to-end via the CLI - no Docker, no fakes for MCP."""
+    import shlex
+    import sys
+    from pathlib import Path
+
+    fixture = Path(__file__).parent / "fixtures" / "echo_mcp_server.py"
+    # Quote properly so Windows paths with spaces survive shlex.split.
+    command = shlex.join([sys.executable, str(fixture)])
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "detonate",
+            str(tmp_path),
+            "--mcp-transport",
+            "subprocess",
+            "--mcp-command",
+            command,
+            "--output",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.output)
+    invocations = [
+        e["payload"]["name"]
+        for e in parsed["timeline"]["events"]
+        if e["type"] == "mcp.tool_invocation"
+    ]
+    assert "echo" in invocations
+    assert "fail" in invocations
+
+
+def test_detonate_subprocess_transport_without_command_exits_2(tmp_path):
+    """Real MCP transport without --mcp-command must produce a clear error."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["detonate", str(tmp_path), "--mcp-transport", "subprocess"])
+    assert result.exit_code == 2
+    assert "mcp-command" in result.output.lower()
+
+
+def test_detonate_invalid_mcp_transport_rejected():
+    runner = CliRunner()
+    result = runner.invoke(cli, ["detonate", "./x", "--mcp-transport", "telnet", "--dry-run"])
+    assert result.exit_code != 0

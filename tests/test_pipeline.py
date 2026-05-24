@@ -64,10 +64,14 @@ def _fake_docker_factory():
 
 @contextmanager
 def _fake_source_resolver(spec):
-    """Yield a tmp Path - the pipeline doesn't care what's in it for tests."""
+    """Yield a tmp Path - the pipeline doesn't care what's in it for tests.
+
+    ignore_cleanup_errors keeps Windows happy when a subprocess transport's
+    cwd briefly holds the directory after the test exits the with-block.
+    """
     import tempfile
 
-    with tempfile.TemporaryDirectory() as d:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
         yield Path(d)
 
 
@@ -75,7 +79,7 @@ def _base_deps(**overrides) -> PipelineDeps:
     """Inject every external dep with a working fake so the pipeline runs."""
     deps = PipelineDeps(
         source_resolver=_fake_source_resolver,
-        mcp_client_factory=lambda _c: FakeMcpClient(),
+        mcp_client_factory=lambda _c, _cfg, _sp: FakeMcpClient(),
         llm_backend_factory=lambda _m, _k: FakeLlmBackend(),
         docker_client_factory=_fake_docker_factory,
         # Disable monitors for tests so we only see events the harness/driver emit.
@@ -214,15 +218,67 @@ def test_invalid_output_raises_value_error():
 # ── Default factories raise PipelineNotReady ─────────────────────────────
 
 
-def test_default_mcp_client_factory_raises_pipeline_not_ready():
-    """The real stdio transport is not wired; only --dry-run works today."""
+def test_default_mcp_client_factory_without_command_raises_pipeline_not_ready():
+    """Real transports require --mcp-command; absence is a clear configuration error."""
     deps = PipelineDeps(
         source_resolver=_fake_source_resolver,
         docker_client_factory=_fake_docker_factory,
         monitors_factory=lambda: [],
     )
-    with pytest.raises(PipelineNotReady, match="MCP transport"):
+    with pytest.raises(PipelineNotReady, match="mcp-command"):
         run_pipeline(_config(mode="fast"), deps)
+
+
+def test_default_mcp_client_factory_subprocess_transport_runs_real_server(tmp_path):
+    """End-to-end: real default factory with subprocess transport against the echo fixture."""
+    import sys
+    from pathlib import Path
+
+    fixture = Path(__file__).parent / "fixtures" / "echo_mcp_server.py"
+    deps = PipelineDeps(
+        source_resolver=_fake_source_resolver,
+        docker_client_factory=_fake_docker_factory,
+        monitors_factory=lambda: [],
+        rules_factory=lambda: [],
+        prompts_factory=lambda: [],
+        llm_backend_factory=lambda _m, _k: FakeLlmBackend(),
+        # Use the real default mcp_client_factory.
+    )
+    config = _config(
+        mode="fast",
+        mcp_transport="subprocess",
+        mcp_command=[sys.executable, str(fixture)],
+    )
+    result = run_pipeline(config, deps)
+    # The harness should have probed the echo server's two tools.
+    timeline_events = [e for e in result.report.timeline.events]
+    tool_invokes = [e for e in timeline_events if e.type == "mcp.tool_invocation"]
+    invoked_names = {e.payload["name"] for e in tool_invokes}
+    assert "echo" in invoked_names
+    assert "fail" in invoked_names
+
+
+def test_default_mcp_client_factory_docker_without_api_raises_pipeline_not_ready():
+    """Docker transport needs a real docker API; the fake docker client has no .client attr."""
+    deps = PipelineDeps(
+        source_resolver=_fake_source_resolver,
+        docker_client_factory=_fake_docker_factory,
+        monitors_factory=lambda: [],
+    )
+    config = _config(
+        mode="fast",
+        mcp_transport="docker",
+        mcp_command=["python", "server.py"],
+    )
+    with pytest.raises(PipelineNotReady, match="docker API"):
+        run_pipeline(config, deps)
+
+
+def test_invalid_mcp_transport_raises_value_error():
+    deps = _base_deps()
+    config = _config(mcp_transport="ssh")
+    with pytest.raises(ValueError, match="mcp_transport"):
+        run_pipeline(config, deps)
 
 
 def test_default_llm_backend_factory_raises_pipeline_not_ready():

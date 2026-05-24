@@ -12,6 +12,8 @@ detection rules, verdict, output) is end-to-end exercised.
 
 from __future__ import annotations
 
+import shlex
+
 import click
 
 from nyuwaymcpsandbox import __version__
@@ -21,6 +23,7 @@ from nyuwaymcpsandbox.drivers.fakes import (
     fake_docker_client_factory,
 )
 from nyuwaymcpsandbox.pipeline import (
+    VALID_MCP_TRANSPORTS,
     VALID_MODES,
     VALID_OUTPUTS,
     PipelineConfig,
@@ -86,12 +89,37 @@ def cli():
     help="Permit real outbound egress from the sandbox (default: sinkholed).",
 )
 @click.option(
+    "--mcp-transport",
+    type=click.Choice(VALID_MCP_TRANSPORTS),
+    default="docker",
+    show_default=True,
+    help="How to talk to the MCP server. 'docker' runs it inside the sandboxed container "
+    "via docker exec; 'subprocess' runs it as a host subprocess (no sandbox).",
+)
+@click.option(
+    "--mcp-command",
+    default=None,
+    help='Command to launch the MCP server, e.g. "python server.py". '
+    "Parsed with shell quoting. Required unless --dry-run is set.",
+)
+@click.option(
     "--dry-run",
     is_flag=True,
     help="Run the pipeline with in-memory fakes instead of real Docker / MCP / LLM transports. "
     "Useful for verifying CLI plumbing without external dependencies.",
 )
-def detonate(target, mode, output, fail_on, api_key, llm_model, allow_network, dry_run):
+def detonate(
+    target,
+    mode,
+    output,
+    fail_on,
+    api_key,
+    llm_model,
+    allow_network,
+    mcp_transport,
+    mcp_command,
+    dry_run,
+):
     """Detonate an MCP server in a sandboxed container and record behavior.
 
     TARGET may be a local path, github:owner/repo, npm:package, or pypi:package.
@@ -104,16 +132,23 @@ def detonate(target, mode, output, fail_on, api_key, llm_model, allow_network, d
         api_key=api_key,
         llm_model=llm_model,
         allow_network=allow_network,
+        mcp_transport=mcp_transport,
+        mcp_command=shlex.split(mcp_command) if mcp_command else [],
     )
 
     deps = PipelineDeps()
     if dry_run:
-        # Replace the real-but-not-yet-wired transports with in-memory
-        # fakes. The docker client is also faked so the orchestrator's
-        # secure-defaults code path still exercises, just without
-        # talking to a real daemon.
-        deps.mcp_client_factory = lambda _container: FakeMcpClient()
+        # Replace the real transports with in-memory fakes. The docker
+        # client is also faked so the orchestrator's secure-defaults
+        # code path still exercises, just without talking to a daemon.
+        deps.mcp_client_factory = lambda _container, _config, _source: FakeMcpClient()
         deps.llm_backend_factory = lambda _model, _key: FakeLlmBackend()
+        deps.docker_client_factory = fake_docker_client_factory
+    elif mcp_transport == "subprocess":
+        # Subprocess transport means the MCP server runs on the host,
+        # not in a container. There's no real container to create, so
+        # fake the docker client. The orchestrator's secure-defaults
+        # code path still exercises - just without daemon traffic.
         deps.docker_client_factory = fake_docker_client_factory
 
     try:
