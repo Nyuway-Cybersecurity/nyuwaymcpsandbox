@@ -75,6 +75,10 @@ class ContainerHandle:
     container_id: str
     image: str
     started_event_id: str
+    # Host-side path the container has bind-mounted at /src. Capture
+    # monitors (e.g. FilesystemMonitor) watch this path on the host's
+    # view of the volume. None when the orchestrator is mocked.
+    source_path: Path | None = None
 
 
 def _build_run_kwargs(config: ContainerConfig) -> dict:
@@ -164,6 +168,7 @@ def container_session(
         container_id=getattr(container, "id", "?"),
         image=config.image,
         started_event_id=started_event.event_id,
+        source_path=Path(config.source_path).resolve() if config.source_path else None,
     )
 
     try:
