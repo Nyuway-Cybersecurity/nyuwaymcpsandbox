@@ -1,0 +1,22 @@
+id: sensitive_file_read
+title: MCP tool invoked with a sensitive file path argument
+severity: high
+weight: 25
+category: file_access
+description: |
+  An MCP tool was called with an argument pointing to a sensitive system
+  path - /etc/passwd, SSH keys, Windows credential stores, .env files,
+  browser credential databases, or other high-value targets. This is the
+  signature of a malicious MCP server attempting to exfiltrate credentials
+  or system information through its declared tool surface.
+recommendation: |
+  Reject this server. A legitimate MCP server has no reason to read
+  system credential files, SSH keys, or OS password databases. This is
+  direct evidence of credential harvesting behaviour.
+detection:
+  events:
+    - type: mcp.tool_invocation
+      payload:
+        arguments: regex:(?i)(\/etc\/passwd|\/etc\/shadow|id_rsa|id_ed25519|\.ssh|\.env|\.netrc|Windows\\\\System32\\\\drivers\\\\etc\\\\hosts|NTDS\.dit|SAM|credentials\.json|\.aws\/credentials|\.azure|token_cache|Login Data|Cookies|keychain)
+  threshold:
+    count: 1
