@@ -358,3 +358,91 @@ def test_exit_code_no_findings_returns_zero():
         findings = []
 
     assert exit_code_for(_R(), "low") == 0
+
+
+# ── Auto-wire PYTHONPATH=/nyuway_runtime ─────────────────────────────────
+
+
+def test_pythonpath_auto_wired_for_docker_transport_with_env_monitor():
+    """When docker transport + EnvironmentMonitor, PYTHONPATH is set automatically."""
+    from nyuwaymcpsandbox.sandbox.monitors.environment import EnvironmentMonitor
+
+    captured_env: dict = {}
+
+    class _CapturingContainers:
+        def run(self, **kwargs):
+            captured_env.update(kwargs.get("environment", {}))
+            return _FakeContainer()
+
+    class _CapturingDockerClient:
+        containers = _CapturingContainers()
+
+    deps = _base_deps(
+        docker_client_factory=lambda: _CapturingDockerClient(),
+        monitors_factory=lambda: [EnvironmentMonitor()],
+    )
+    config = _config(mcp_transport="docker", mcp_command=["python", "server.py"])
+    run_pipeline(config, deps)
+
+    assert captured_env.get("PYTHONPATH") == "/nyuway_runtime", (
+        f"Expected PYTHONPATH=/nyuway_runtime in container env, got: {captured_env}"
+    )
+
+
+def test_pythonpath_not_injected_for_subprocess_transport():
+    """subprocess transport runs on the host - PYTHONPATH injection is skipped."""
+    from nyuwaymcpsandbox.sandbox.monitors.environment import EnvironmentMonitor
+
+    captured_env: dict = {}
+
+    class _CapturingContainers:
+        def run(self, **kwargs):
+            captured_env.update(kwargs.get("environment", {}))
+            return _FakeContainer()
+
+    class _CapturingDockerClient:
+        containers = _CapturingContainers()
+
+    deps = _base_deps(
+        docker_client_factory=lambda: _CapturingDockerClient(),
+        monitors_factory=lambda: [EnvironmentMonitor()],
+    )
+    # subprocess transport - fake docker still runs for the session but
+    # PYTHONPATH should not be injected since the server runs on the host.
+    import sys
+    from pathlib import Path
+
+    fixture = Path(__file__).parent / "fixtures" / "echo_mcp_server.py"
+    config = _config(
+        mcp_transport="subprocess",
+        mcp_command=[sys.executable, str(fixture)],
+    )
+    run_pipeline(config, deps)
+
+    assert "PYTHONPATH" not in captured_env, (
+        f"PYTHONPATH should not be set for subprocess transport, got: {captured_env}"
+    )
+
+
+def test_pythonpath_not_injected_without_env_monitor():
+    """Without EnvironmentMonitor in the list, PYTHONPATH is not touched."""
+    captured_env: dict = {}
+
+    class _CapturingContainers:
+        def run(self, **kwargs):
+            captured_env.update(kwargs.get("environment", {}))
+            return _FakeContainer()
+
+    class _CapturingDockerClient:
+        containers = _CapturingContainers()
+
+    deps = _base_deps(
+        docker_client_factory=lambda: _CapturingDockerClient(),
+        monitors_factory=lambda: [],  # no EnvironmentMonitor
+    )
+    config = _config(mcp_transport="docker", mcp_command=["python", "server.py"])
+    run_pipeline(config, deps)
+
+    assert "PYTHONPATH" not in captured_env, (
+        f"PYTHONPATH should not be set without EnvironmentMonitor, got: {captured_env}"
+    )

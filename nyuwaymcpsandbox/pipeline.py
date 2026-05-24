@@ -215,11 +215,31 @@ def run_pipeline(config: PipelineConfig, deps: PipelineDeps | None = None) -> Pi
 
     with deps.source_resolver(config.target) as local_path:
         image = deps.image_selector(local_path)
+
+        # Build monitors before ContainerConfig so we can inspect the list
+        # and auto-wire PYTHONPATH when EnvironmentMonitor is active.
+        monitors = deps.monitors_factory()
+
+        # Auto-inject PYTHONPATH=/nyuway_runtime into the container env when:
+        # - docker transport is in use (subprocess runs on the host and
+        #   doesn't go through ContainerConfig.env), and
+        # - EnvironmentMonitor is in the monitor list (it drops sitecustomize.py
+        #   into /nyuway_runtime; Python only picks it up if that directory
+        #   appears on PYTHONPATH at interpreter startup).
+        # Previously operators had to add "env PYTHONPATH=/nyuway_runtime" to
+        # --mcp-command manually. This wires it automatically with zero effort.
+        container_env: dict[str, str] = {}
+        if config.mcp_transport == "docker" and any(
+            isinstance(m, EnvironmentMonitor) for m in monitors
+        ):
+            container_env["PYTHONPATH"] = "/nyuway_runtime"
+
         container_config = ContainerConfig(
             image=image,
             source_path=local_path,
             command=list(config.command),
             allow_network=config.allow_network,
+            env=container_env,
         )
         with container_session(
             container_config,
@@ -227,7 +247,6 @@ def run_pipeline(config: PipelineConfig, deps: PipelineDeps | None = None) -> Pi
             scan_start,
             client_factory=deps.docker_client_factory,
         ) as container:
-            monitors = deps.monitors_factory()
             with monitor_session(monitors, container, timeline, scan_start):
                 mcp = deps.mcp_client_factory(container, config, local_path)
 
