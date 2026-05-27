@@ -59,6 +59,42 @@ class PipelineNotReady(Exception):
     """A real transport or backend is required but not yet wired."""
 
 
+def _npm_install_on_host(source_path: "Path") -> None:
+    """Run ``npm install --production`` in *source_path* on the host.
+
+    Published npm tarballs never include node_modules.  We install them
+    host-side so the bind-mounted /src already contains node_modules when
+    the container starts - no network access needed inside the sandboxed
+    container.
+
+    Requires npm on the host PATH (standard with any Node.js installation).
+    Raises RuntimeError with a clear message if npm is not found or exits
+    non-zero.
+    """
+    import shutil
+    import subprocess
+
+    npm = shutil.which("npm")
+    if npm is None:
+        raise RuntimeError(
+            "npm not found on PATH. Install Node.js (https://nodejs.org) "
+            "to detonation npm-transport MCP servers."
+        )
+
+    result = subprocess.run(
+        [npm, "install", "--production", "--silent", "--ignore-scripts"],
+        cwd=str(source_path),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        snippet = (result.stderr or result.stdout or "")[:400]
+        raise RuntimeError(
+            f"npm install failed (exit {result.returncode}) in {source_path}: {snippet}"
+        )
+
+
 def _default_monitors() -> list[Monitor]:
     """Return the four built-in monitor stubs."""
     return [NetworkMonitor(), FilesystemMonitor(), EnvironmentMonitor(), ProcessMonitor()]
@@ -241,7 +277,21 @@ def run_pipeline(config: PipelineConfig, deps: PipelineDeps | None = None) -> Pi
     scan_start = time.monotonic()
     timeline = BehavioralTimeline()
 
+    is_npm_docker = (
+        config.target.startswith("npm:")
+        and config.mcp_transport == "docker"
+    )
+
     with deps.source_resolver(config.target) as local_path:
+        # npm packages: install dependencies on the host before bind-mounting
+        # /src into the container.  Published tarballs never include
+        # node_modules; the container runs with network_mode=none so npm
+        # cannot reach the registry from inside the sandbox.  Installing on
+        # the host is the standard workaround - node_modules end up inside
+        # local_path and are visible as /src/node_modules in the container.
+        if is_npm_docker:
+            _npm_install_on_host(local_path)
+
         # Use the caller-supplied image when set; otherwise auto-select from
         # the source tree. The override is the escape hatch for servers that
         # need a non-default runtime (e.g. browser-capable playwright image).
@@ -283,6 +333,7 @@ def run_pipeline(config: PipelineConfig, deps: PipelineDeps | None = None) -> Pi
         # All other security defaults remain: network sinkholed, root
         # filesystem read-only, no-new-privileges, resource caps.
         tmpfs: dict[str, str] = {}
+
         cap_add: list[str] = []
         shm_size: str | None = None
         seccomp_unconfined = False
