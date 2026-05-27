@@ -1,3 +1,3 @@
 """nyuwaymcpsandbox - Open-source behavioral sandbox for MCP servers."""
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
