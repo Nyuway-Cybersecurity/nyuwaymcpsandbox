@@ -89,7 +89,17 @@ def _default_mcp_client_factory(container_handle, config, source_path) -> McpCli
 
     transport = config.mcp_transport
     if transport == "subprocess":
-        stream = SubprocessStdioStream(command, cwd=source_path)
+        # Merge env_extra on top of the host environment so injected test
+        # credentials reach a host-subprocess MCP server. Container-mode
+        # servers get the same keys via ContainerConfig.env (handled in
+        # run_pipeline). Falling back to None when env_extra is empty
+        # preserves SubprocessStdioStream's default-inherit behaviour.
+        sub_env: dict[str, str] | None = None
+        if config.env_extra:
+            import os as _os
+
+            sub_env = {**_os.environ, **config.env_extra}
+        stream = SubprocessStdioStream(command, cwd=source_path, env=sub_env)
         return StdioMcpClient(stream)
     if transport == "docker":
         api = getattr(getattr(container_handle.container, "client", None), "api", None)
@@ -171,6 +181,16 @@ class PipelineConfig:
     # tmpfs mount so browser runtimes can write crash reports and lock files
     # while the rest of the root filesystem stays read-only.
     container_image: str | None = None
+    # Caller-supplied environment variables loaded into BOTH the container
+    # env (docker transport) and the host subprocess env (subprocess
+    # transport). Use this to inject dummy-but-shape-valid test credentials
+    # so credential-gated MCP servers can initialise and exercise their
+    # network/file/process side-effects, which our capture monitors then
+    # observe. The injected creds are intentionally fake; they let the
+    # server START so we can see what it tries to do. Keys are merged on
+    # top of any pipeline-managed env (PYTHONPATH, CHROME_EXECUTABLE_PATH);
+    # caller wins on conflict.
+    env_extra: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -311,6 +331,14 @@ def run_pipeline(config: PipelineConfig, deps: PipelineDeps | None = None) -> Pi
                 startup_cmd = ["sleep", "infinity"]
         else:
             startup_cmd = list(config.command)
+
+        # Merge caller-supplied env_extra last so injected test credentials
+        # never overwrite pipeline-managed keys (PYTHONPATH for env-monitor,
+        # CHROME_EXECUTABLE_PATH for browser wrapper). Within env_extra
+        # itself, later keys win (standard dict update semantics).
+        for k, v in config.env_extra.items():
+            if k not in container_env:
+                container_env[k] = v
 
         container_config = ContainerConfig(
             image=image,

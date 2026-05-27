@@ -53,6 +53,40 @@ def _docker_sdk_for_setup():
         return None
 
 
+def _load_env_file(path: str) -> dict[str, str]:
+    """Parse a minimal KEY=VALUE .env file.
+
+    Accepts lines of the form ``KEY=VALUE``. Surrounding double or single
+    quotes on the VALUE are stripped. Blank lines and lines starting with
+    ``#`` are ignored. Whitespace around ``KEY`` is stripped. ``export ``
+    prefixes are tolerated (some env files include them).
+
+    Deliberately minimal: no variable interpolation, no multi-line strings,
+    no escape sequences. Matches the format we publish in
+    ``tools/dummy-creds-template.env`` and is enough for the research
+    campaign's credential injection use case.
+    """
+    out: dict[str, str] = {}
+    with open(path, encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export ") :]
+            if "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            if not key:
+                continue
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            out[key] = value
+    return out
+
+
 @click.group()
 @click.version_option(__version__, prog_name="nyuwaymcpsandbox")
 def cli():
@@ -130,6 +164,18 @@ def cli():
     "tmpfs mount (256 MB) so browser runtimes can write temp files.",
 )
 @click.option(
+    "--env-file",
+    "env_file",
+    type=click.Path(exists=True, dir_okay=False, readable=True),
+    default=None,
+    help="Path to a KEY=VALUE .env file whose entries are injected into the MCP "
+    "server's environment (container env for docker transport, subprocess env "
+    "for subprocess transport). Use this to inject dummy-but-shape-valid test "
+    "credentials so credential-gated servers can initialise and exercise their "
+    "side-effects. Pipeline-managed keys (PYTHONPATH, CHROME_EXECUTABLE_PATH) "
+    "always win; --env-file values are merged on top of everything else.",
+)
+@click.option(
     "--dry-run",
     is_flag=True,
     help="Run the pipeline with in-memory fakes instead of real Docker / MCP / LLM transports. "
@@ -147,6 +193,7 @@ def detonate(
     mcp_command,
     mcp_args,
     container_image,
+    env_file,
     dry_run,
 ):
     """Detonate an MCP server in a sandboxed container and record behavior.
@@ -166,6 +213,8 @@ def detonate(
     else:
         resolved_command = []
 
+    env_extra = _load_env_file(env_file) if env_file else {}
+
     config = PipelineConfig(
         target=target,
         mode=mode,
@@ -177,6 +226,7 @@ def detonate(
         mcp_transport=mcp_transport,
         mcp_command=resolved_command,
         container_image=container_image,
+        env_extra=env_extra,
     )
 
     deps = PipelineDeps()
