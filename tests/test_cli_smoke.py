@@ -8,6 +8,7 @@ exhaustively in test_pipeline.py.
 import json
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from nyuwaymcpsandbox import __version__
@@ -314,15 +315,15 @@ def test_detonate_mcp_command_fallback_when_no_mcp_arg(tmp_path):
     Uses shlex.join to produce a properly quoted command string so the
     round-trip through shlex.split is lossless on all platforms.
     """
-    import shlex
+    import shlex as _shlex
     import sys
-    from pathlib import Path
+    from pathlib import Path as _Path
 
-    fixture = Path(__file__).parent / "fixtures" / "echo_mcp_server.py"
+    fixture = _Path(__file__).parent / "fixtures" / "echo_mcp_server.py"
     # shlex.join quotes each token so the round-trip through shlex.split
     # is safe on Linux/macOS. Windows users with backslash paths should
     # use --mcp-arg instead (which bypasses shlex entirely).
-    command = shlex.join([sys.executable, str(fixture)])
+    command = _shlex.join([sys.executable, str(fixture)])
     runner = CliRunner()
     result = runner.invoke(
         cli,
@@ -338,3 +339,112 @@ def test_detonate_mcp_command_fallback_when_no_mcp_arg(tmp_path):
         ],
     )
     assert result.exit_code == 0, result.output
+
+
+# --- --env-file flag tests -------------------------------------------------
+
+
+def test_load_env_file_parses_typical_dotenv(tmp_path):
+    """The .env parser handles the common shapes: KEY=value, quotes, comments."""
+    from nyuwaymcpsandbox.cli.main import _load_env_file
+
+    env_file = tmp_path / "creds.env"
+    env_file.write_text(
+        "# This is a comment\n"
+        "\n"
+        "GITHUB_TOKEN=ghp_FakeToken123\n"
+        '  SLACK_BOT_TOKEN  =  "xoxb-FakeToken"  \n'
+        'DOUBLE_QUOTED="hello world"\n'
+        "SINGLE_QUOTED='single value'\n"
+        "export EXPORTED_KEY=also_fine\n"
+        "EMPTY_VALUE=\n"
+        "NO_EQUALS_LINE_IS_IGNORED\n",
+        encoding="utf-8",
+    )
+    parsed = _load_env_file(str(env_file))
+    assert parsed["GITHUB_TOKEN"] == "ghp_FakeToken123"
+    assert parsed["SLACK_BOT_TOKEN"] == "xoxb-FakeToken"
+    assert parsed["DOUBLE_QUOTED"] == "hello world"
+    assert parsed["SINGLE_QUOTED"] == "single value"
+    assert parsed["EXPORTED_KEY"] == "also_fine"
+    assert parsed["EMPTY_VALUE"] == ""
+    assert "NO_EQUALS_LINE_IS_IGNORED" not in parsed
+
+
+def test_load_env_file_missing_path_raises():
+    from nyuwaymcpsandbox.cli.main import _load_env_file
+
+    with pytest.raises(FileNotFoundError):
+        _load_env_file("/path/does/not/exist.env")
+
+
+def test_detonate_rejects_invalid_env_file_path(tmp_path):
+    """Click validates the path before our code runs - exit non-zero."""
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "detonate",
+            str(tmp_path),
+            "--dry-run",
+            "--env-file",
+            str(tmp_path / "does_not_exist.env"),
+        ],
+    )
+    assert result.exit_code != 0
+
+
+def test_detonate_env_file_loaded_and_passed_through_config(tmp_path):
+    """End-to-end: --env-file populates PipelineConfig.env_extra."""
+    env_file = tmp_path / "creds.env"
+    env_file.write_text("FOO=bar\nBAZ=qux\n", encoding="utf-8")
+
+    captured: dict = {}
+    import nyuwaymcpsandbox.cli.main as cli_mod
+
+    original_run = cli_mod.run_pipeline
+
+    def _spy(config, deps=None):
+        captured["env_extra"] = dict(config.env_extra)
+        return original_run(config, deps)
+
+    cli_mod.run_pipeline = _spy
+    try:
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "detonate",
+                str(tmp_path),
+                "--dry-run",
+                "--env-file",
+                str(env_file),
+            ],
+        )
+    finally:
+        cli_mod.run_pipeline = original_run
+
+    assert result.exit_code == 0, result.output
+    assert captured["env_extra"] == {"FOO": "bar", "BAZ": "qux"}
+
+
+def test_detonate_without_env_file_yields_empty_env_extra(tmp_path):
+    """Omitting --env-file leaves env_extra as an empty dict (no surprises)."""
+    captured: dict = {}
+    import nyuwaymcpsandbox.cli.main as cli_mod
+
+    original_run = cli_mod.run_pipeline
+
+    def _spy(config, deps=None):
+        captured["env_extra"] = dict(config.env_extra)
+        return original_run(config, deps)
+
+    cli_mod.run_pipeline = _spy
+    try:
+        runner = CliRunner()
+        result = runner.invoke(cli, ["detonate", str(tmp_path), "--dry-run"])
+    finally:
+        cli_mod.run_pipeline = original_run
+
+    assert result.exit_code == 0, result.output
+    assert captured["env_extra"] == {}

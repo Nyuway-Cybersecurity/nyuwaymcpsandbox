@@ -1,0 +1,228 @@
+# Curated list of 30 public MCP servers for the v1.1 research campaign.
+#
+# Mix is:
+#   10 official @modelcontextprotocol/* (baseline; expected mostly PASS)
+#   15 community npm packages
+#   5  community PyPI packages
+#
+# Path conventions inside the container:
+#   /src         : the resolved source tree, bind-mounted read-only.
+#                  For npm packages this is the unpacked tarball, so
+#                  the entry point is typically /src/dist/index.js or
+#                  the path in the package's "bin" field.
+#
+# Fields per entry:
+#   id                  : slug used for filenames and logs
+#   source              : detonate target (npm:..., pypi:..., github:..., or local)
+#   transport           : docker (default) | subprocess
+#   mode                : full (default; runs LLM driver) | fast
+#   mcp_command         : shell-quoted command string run inside the container
+#   mcp_args            : alternative to mcp_command, list of args (no shlex)
+#   container_image     : optional image override
+#   inject_credentials  : default true; set false to skip --env-file for this server
+#   allow_network       : default false; set true to allow real outbound traffic
+#   timeout             : seconds; default 600
+#   llm                 : override the global --llm for this server
+#   api_key_env         : env var to source the LLM api key from
+#
+# Python (pypi) servers run via subprocess transport because v1.0 Docker
+# mode lacks a pip-install layer (filed in ROADMAP_internal v1.1). Their
+# entries below document the resulting monitor gap.
+
+# === Official @modelcontextprotocol/* (10) ===
+
+- id: mcp-server-everything
+  source: npm:@modelcontextprotocol/server-everything
+  transport: docker
+  mode: full
+  mcp_command: "node /src/dist/index.js"
+
+- id: mcp-server-memory
+  source: npm:@modelcontextprotocol/server-memory
+  transport: docker
+  mode: full
+  mcp_command: "node /src/dist/index.js"
+
+- id: mcp-server-sequential-thinking
+  source: npm:@modelcontextprotocol/server-sequential-thinking
+  transport: docker
+  mode: full
+  mcp_command: "node /src/dist/index.js"
+
+- id: mcp-server-github
+  source: npm:@modelcontextprotocol/server-github
+  transport: docker
+  mode: full
+  mcp_command: "node /src/dist/index.js"
+
+- id: mcp-server-aws-kb-retrieval
+  source: npm:@modelcontextprotocol/server-aws-kb-retrieval
+  transport: docker
+  mode: full
+  mcp_command: "node /src/dist/index.js"
+
+- id: mcp-server-filesystem
+  source: npm:@modelcontextprotocol/server-filesystem
+  transport: docker
+  mode: full
+  # /tmp is writable (tmpfs in browser-image; otherwise still readable
+  # for the server's allowed-dirs check).
+  mcp_command: "node /src/dist/index.js /tmp"
+
+- id: mcp-server-brave-search
+  source: npm:@modelcontextprotocol/server-brave-search
+  transport: docker
+  mode: full
+  mcp_command: "node /src/dist/index.js"
+
+- id: mcp-server-slack
+  source: npm:@modelcontextprotocol/server-slack
+  transport: docker
+  mode: full
+  mcp_command: "node /src/dist/index.js"
+
+- id: mcp-server-gitlab
+  source: npm:@modelcontextprotocol/server-gitlab
+  transport: docker
+  mode: full
+  mcp_command: "node /src/dist/index.js"
+
+- id: mcp-server-google-maps
+  source: npm:@modelcontextprotocol/server-google-maps
+  transport: docker
+  mode: full
+  mcp_command: "node /src/dist/index.js"
+
+
+# === Community npm (15) ===
+
+- id: mcp-server-puppeteer-official
+  source: npm:@modelcontextprotocol/server-puppeteer
+  transport: docker
+  mode: full
+  container_image: mcr.microsoft.com/playwright:v1.57.0-noble
+  mcp_command: "node /src/dist/index.js"
+
+- id: mcp-server-mysql
+  source: npm:@benborla29/mcp-server-mysql
+  transport: docker
+  mode: full
+  mcp_command: "node /src/dist/index.js"
+
+- id: mcp-server-kubernetes
+  source: npm:mcp-server-kubernetes
+  transport: docker
+  mode: full
+  mcp_command: "node /src/dist/index.js"
+  # Spent 2m+ in connection retry loop in earlier tests.
+  timeout: 900
+
+- id: notion-mcp-server
+  source: npm:@notionhq/notion-mcp-server
+  transport: docker
+  mode: full
+  mcp_command: "node /src/bin/cli.mjs"
+
+- id: simulator-mcp-server
+  source: npm:@joshuarileydev/simulator-mcp-server
+  transport: subprocess
+  mode: fast
+  # iOS simulator binding; macOS-only. fast mode for protocol probe only.
+  mcp_args: ["node", "/src/dist/index.js"]
+
+- id: playwright-mcp-server
+  source: npm:@executeautomation/playwright-mcp-server
+  transport: docker
+  mode: full
+  container_image: mcr.microsoft.com/playwright:v1.57.0-noble
+  mcp_command: "node /src/dist/index.js"
+
+- id: mcp-server-everart
+  source: npm:@modelcontextprotocol/server-everart
+  transport: docker
+  mode: full
+  mcp_command: "node /src/dist/index.js"
+
+- id: mcp-server-redis
+  source: npm:@modelcontextprotocol/server-redis
+  transport: docker
+  mode: full
+  mcp_command: "node /src/dist/index.js redis://localhost:6379"
+
+- id: mcp-server-sentry
+  source: npm:@modelcontextprotocol/server-sentry
+  transport: docker
+  mode: full
+  mcp_command: "node /src/dist/index.js"
+
+- id: mcp-server-gdrive
+  source: npm:@modelcontextprotocol/server-gdrive
+  transport: docker
+  mode: full
+  mcp_command: "node /src/dist/index.js"
+
+- id: mcp-server-time-npm
+  source: npm:@modelcontextprotocol/server-time
+  transport: docker
+  mode: full
+  mcp_command: "node /src/dist/index.js"
+
+- id: mcp-server-fetch-npm
+  source: npm:@modelcontextprotocol/server-fetch
+  transport: docker
+  mode: full
+  mcp_command: "node /src/dist/index.js"
+
+- id: mcp-server-sqlite-npm
+  source: npm:@modelcontextprotocol/server-sqlite
+  transport: docker
+  mode: full
+  mcp_command: "node /src/dist/index.js /tmp/test.db"
+
+- id: mcp-server-postgres
+  source: npm:@modelcontextprotocol/server-postgres
+  transport: docker
+  mode: full
+  mcp_command: "node /src/dist/index.js"
+
+- id: mcp-server-discord
+  source: npm:mcp-server-discord
+  transport: docker
+  mode: full
+  mcp_command: "node /src/dist/index.js"
+
+
+# === Community PyPI (5) ===
+# Python servers run via subprocess transport until v1.1 ships a Docker
+# Python install layer. Documented monitor gap: NetworkMonitor,
+# FilesystemMonitor, EnvironmentMonitor, ProcessMonitor do not run.
+
+- id: pypi-mcp-server-git
+  source: pypi:mcp-server-git
+  transport: subprocess
+  mode: full
+  mcp_args: ["python", "-m", "mcp_server_git", "--repository", "/tmp"]
+
+- id: pypi-mcp-server-time
+  source: pypi:mcp-server-time
+  transport: subprocess
+  mode: full
+  mcp_args: ["python", "-m", "mcp_server_time"]
+
+- id: pypi-mcp-server-fetch
+  source: pypi:mcp-server-fetch
+  transport: subprocess
+  mode: full
+  mcp_args: ["python", "-m", "mcp_server_fetch"]
+
+- id: pypi-mcp-server-sqlite
+  source: pypi:mcp-server-sqlite
+  transport: subprocess
+  mode: full
+  mcp_args: ["python", "-m", "mcp_server_sqlite", "--db-path", "/tmp/research.db"]
+
+- id: pypi-mcp-server-aws-kb-retrieval
+  source: pypi:mcp-server-aws-kb-retrieval
+  transport: subprocess
+  mode: full
+  mcp_args: ["python", "-m", "mcp_server_aws_kb_retrieval"]
