@@ -1,0 +1,30 @@
+id: pre_tool_network_activity
+title: Server delayed first MCP response (suggests background activity)
+severity: medium
+weight: 15
+category: stealth_behavior
+description: |
+  The MCP server took 60 seconds or longer to respond to tools/list
+  after the sandbox container was ready. During that window the
+  protocol channel is silent but the server process is alive, which
+  usually means it is doing work the operator cannot observe directly:
+  outbound connection retries against blocked endpoints, lazy
+  authentication, credential lookups, or beaconing.
+
+  Observed in the wild: mcp-server-kubernetes spent 2 minutes 38
+  seconds in a Kubernetes API connection retry loop on a sandbox with
+  network_mode=none before finally answering tools/list.
+
+  This is the protocol-level analogue of a C2 implant: long initial
+  silence, then ordinary-looking traffic.
+recommendation: |
+  Investigate what the server is doing during the silent window. Run
+  the detonation a second time with --allow-network and a DNS+packet
+  capture sidecar to confirm whether the server is attempting outbound
+  connections, and to which endpoints. If the destinations are not on
+  a vendor-documented allowlist, treat the server as suspect.
+detection:
+  events:
+    - type: mcp.delayed_initialization
+  threshold:
+    count: 1

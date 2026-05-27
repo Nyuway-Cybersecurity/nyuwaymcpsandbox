@@ -6,6 +6,7 @@ exhaustively in test_pipeline.py.
 """
 
 import json
+from pathlib import Path
 
 from click.testing import CliRunner
 
@@ -18,6 +19,24 @@ def test_cli_version_flag_emits_version():
     result = runner.invoke(cli, ["--version"])
     assert result.exit_code == 0
     assert __version__ in result.output
+
+
+def test_version_consistency():
+    """__init__.__version__ must match the version declared in pyproject.toml.
+
+    Catches the common drift where one file is updated but the other is not.
+    """
+    import tomllib  # stdlib 3.11+
+
+    pyproject = Path(__file__).parent.parent / "pyproject.toml"
+    with pyproject.open("rb") as fh:
+        data = tomllib.load(fh)
+    toml_version = data["project"]["version"]
+    assert __version__ == toml_version, (
+        f"nyuwaymcpsandbox/__init__.py has __version__ = {__version__!r} "
+        f"but pyproject.toml has version = {toml_version!r}. "
+        "Update both files together."
+    )
 
 
 def test_cli_help_lists_commands():

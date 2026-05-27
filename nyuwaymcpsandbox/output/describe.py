@@ -19,8 +19,10 @@ from nyuwaymcpsandbox.sandbox.events import (
     EVT_FS_WRITE,
     EVT_LLM_PROMPT_SENT,
     EVT_LLM_RESPONSE,
+    EVT_MCP_DELAYED_INIT,
     EVT_MCP_PROMPT,
     EVT_MCP_RESOURCE,
+    EVT_MCP_SLOW_TOOL,
     EVT_MCP_TOOL_INVOKE,
     EVT_MCP_TOOL_LIST,
     EVT_NETWORK_CONNECT,
@@ -108,6 +110,13 @@ def describe_event(event: BehavioralEvent) -> str:
         return "MCP server listed tools"
     if t == EVT_MCP_TOOL_INVOKE:
         return f"Tool '{_truncate(str(p.get('name', '?')))}' invoked"
+    if t == EVT_MCP_SLOW_TOOL:
+        name = _truncate(str(p.get("name", "?")))
+        dur = p.get("duration_seconds", "?")
+        return f"Slow tool response: '{name}' took {dur}s"
+    if t == EVT_MCP_DELAYED_INIT:
+        secs = p.get("startup_seconds", "?")
+        return f"Server delayed initialisation: {secs}s before tools/list"
     if t == EVT_MCP_PROMPT:
         return f"MCP prompt: {_truncate(str(p.get('name', '?')))}"
     if t == EVT_MCP_RESOURCE:

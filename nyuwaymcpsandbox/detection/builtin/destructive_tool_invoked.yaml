@@ -1,0 +1,33 @@
+id: destructive_tool_invoked
+title: Destructive tool invoked by deterministic harness
+severity: high
+weight: 20
+category: state_mutation
+description: |
+  The MCP server exposes a tool whose name signals a state-mutating or
+  destructive operation: git_commit, git_reset, kubectl_delete,
+  kubectl_apply, exec_in_pod, drop_table, force_overwrite, and similar.
+  The deterministic harness invoked it with synthetic input as part of
+  routine probing.
+
+  This is not necessarily malicious - many useful MCP servers expose
+  destructive tools for legitimate reasons. The finding flags that a
+  pre-deployment scan exercised those tool paths, so the operator must
+  decide whether the tool surface is acceptable for the deployment
+  context (a read-only RAG agent should never need git_commit).
+recommendation: |
+  Audit which destructive tools this server exposes and confirm each
+  one is required for your deployment. If the operating context is
+  read-only (e.g. an agent that should never mutate state), reject
+  the server or fork it with the destructive tools removed. Pair this
+  rule with a tool-name allowlist enforced at the host config level.
+detection:
+  events:
+    - type: mcp.tool_invocation
+      payload:
+        # Cover git mutations, kubernetes mutations, helm chart lifecycle,
+        # database schema/data destruction, filesystem destruction,
+        # shell/exec capability, and generic "force" / "purge" verbs.
+        name: regex:(?i)^(git_(commit|reset|push|rebase|merge|cherry_pick|revert|stash_drop|branch_delete|tag_delete|am)|kubectl_(delete|apply|create|patch|scale|rollout|replace|cordon|drain|taint)|exec_in_pod|install_helm_chart|uninstall_helm_chart|upgrade_helm_chart|node_management|cleanup|port_forward|drop_table|drop_database|truncate_table|delete_row|delete_record|delete_collection|delete_index|destroy_|purge_|wipe_|force_|reset_|reformat_|shell_exec|run_command|execute_command|exec_command|kubectl_generic|kubectl_exec)
+  threshold:
+    count: 1

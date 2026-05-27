@@ -53,6 +53,12 @@ class ContainerConfig:
 
     image and source_path are required. command is the entry point the
     sandbox runs inside the container (e.g. ["python", "server.py"]).
+
+    tmpfs: mapping of container path -> mount options string (e.g.
+    {"/tmp": "size=256m"}). Each entry is exposed as a writable
+    in-memory filesystem while the root filesystem stays read-only.
+    Required for browser-based servers (playwright, puppeteer) that
+    write crash reports and lock files at runtime.
     """
 
     image: str
@@ -65,6 +71,29 @@ class ContainerConfig:
     timeout_seconds: int = 120
     allow_network: bool = False
     env: dict[str, str] = field(default_factory=dict)
+    tmpfs: dict[str, str] = field(default_factory=dict)
+    # Capabilities to add back after the cap_drop=['ALL'] baseline.
+    # Empty by default (maximum hardening). Browser-based servers need at
+    # least SYS_PTRACE so Chrome's Zygote can trace renderer subprocesses.
+    cap_add: list[str] = field(default_factory=list)
+    # /dev/shm size. Docker defaults to 64 MB which is too small for
+    # Chromium. Set to e.g. "512m" for browser-based servers.
+    shm_size: str | None = None
+    # When True, replaces the Docker default seccomp profile with
+    # "unconfined" (all syscalls allowed). Required for Chromium in Docker:
+    # the default profile blocks clone(CLONE_NEWNS) and related namespace
+    # syscalls that Chrome's process model uses even with --no-sandbox.
+    # A targeted seccomp allowlist (v1.1) would be more precise but
+    # "unconfined" is the standard Docker guidance for browser containers.
+    seccomp_unconfined: bool = False
+    # When True, omits the read_only=True rootfs restriction. Required for
+    # browser-based containers: Chrome's crashpad handler initialization
+    # fails when it cannot write its crash database, even with /tmp as tmpfs.
+    # The write locations span /var/cache/fontconfig, runtime-generated crash
+    # dirs, and chromium profile subdirs that are not all predictable. All
+    # other security properties remain: network sinkholed, cap_drop, resource
+    # limits, no-new-privileges.
+    allow_writable_rootfs: bool = False
 
 
 @dataclass
@@ -83,7 +112,7 @@ class ContainerHandle:
 
 def _build_run_kwargs(config: ContainerConfig) -> dict:
     """Produce the docker-py keyword arguments for a secure run."""
-    return {
+    kwargs: dict = {
         "image": config.image,
         "command": list(config.command) if config.command else None,
         "detach": True,
@@ -98,13 +127,23 @@ def _build_run_kwargs(config: ContainerConfig) -> dict:
         "mem_limit": config.mem_limit,
         "nano_cpus": int(config.cpu_quota * 1_000_000_000),
         "pids_limit": config.pids_limit,
-        "read_only": True,
+        "read_only": not config.allow_writable_rootfs,
         "cap_drop": ["ALL"],
         "security_opt": ["no-new-privileges:true"],
         "environment": dict(config.env),
         "stdout": True,
         "stderr": True,
     }
+    if config.tmpfs:
+        kwargs["tmpfs"] = dict(config.tmpfs)
+    if config.cap_add:
+        kwargs["cap_add"] = list(config.cap_add)
+    if config.shm_size is not None:
+        kwargs["shm_size"] = config.shm_size
+    if config.seccomp_unconfined:
+        # Append to the list so we don't blow away no-new-privileges.
+        kwargs["security_opt"] = list(kwargs["security_opt"]) + ["seccomp=unconfined"]
+    return kwargs
 
 
 def _get_client(client_factory=None):

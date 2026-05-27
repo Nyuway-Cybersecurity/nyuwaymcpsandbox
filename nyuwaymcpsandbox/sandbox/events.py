@@ -49,6 +49,18 @@ EVT_MCP_TOOL_LIST = "mcp.tool_list"
 EVT_MCP_TOOL_INVOKE = "mcp.tool_invocation"
 EVT_MCP_PROMPT = "mcp.prompt_response"
 EVT_MCP_RESOURCE = "mcp.resource_access"
+# Derived behavioral signals emitted by the deterministic harness when the
+# timing of standard MCP traffic itself crosses a suspicion threshold.
+# slow_tool_response: a single tool/call returned more than N seconds after
+#   the harness issued it. Distinguishes "tool returned an error" from
+#   "tool hung the conversation for half a minute".
+# delayed_initialization: the MCP server took more than N seconds to answer
+#   tools/list after the container was ready. The gap is dead air to the
+#   protocol but the server is usually busy doing something we can't see
+#   (network retries, lazy auth, credential lookups). Surfaces servers
+#   that beacon or stall before serving traffic.
+EVT_MCP_SLOW_TOOL = "mcp.slow_tool_response"
+EVT_MCP_DELAYED_INIT = "mcp.delayed_initialization"
 
 # LLM driver (Full mode only)
 EVT_LLM_PROMPT_SENT = "llm.prompt_sent"

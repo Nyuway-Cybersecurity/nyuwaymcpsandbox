@@ -424,6 +424,459 @@ def test_pythonpath_not_injected_for_subprocess_transport():
     )
 
 
+# ── Docker transport keep-alive (sleep infinity) ─────────────────────────
+
+
+def test_docker_transport_injects_sleep_infinity_as_container_command():
+    """Docker transport must start the container with sleep infinity so it
+    stays alive for docker exec. Without this the container exits immediately
+    and exec_create returns 409 'container is not running'."""
+    captured: dict = {}
+
+    class _CapturingContainers:
+        def run(self, **kwargs):
+            captured["command"] = kwargs.get("command")
+            return _FakeContainer()
+
+    class _CapturingDockerClient:
+        containers = _CapturingContainers()
+
+    deps = _base_deps(
+        docker_client_factory=lambda: _CapturingDockerClient(),
+    )
+    config = _config(mcp_transport="docker", mcp_command=["node", "dist/index.js"])
+    run_pipeline(config, deps)
+
+    assert captured.get("command") == ["sleep", "infinity"], (
+        f"Expected container command ['sleep', 'infinity'], got: {captured.get('command')}"
+    )
+
+
+def test_docker_transport_explicit_command_takes_precedence_over_sleep_infinity():
+    """If config.command is explicitly set, it overrides the sleep infinity default."""
+    captured: dict = {}
+
+    class _CapturingContainers:
+        def run(self, **kwargs):
+            captured["command"] = kwargs.get("command")
+            return _FakeContainer()
+
+    class _CapturingDockerClient:
+        containers = _CapturingContainers()
+
+    deps = _base_deps(
+        docker_client_factory=lambda: _CapturingDockerClient(),
+    )
+    config = _config(
+        mcp_transport="docker",
+        mcp_command=["node", "dist/index.js"],
+        command=["my_custom_entrypoint"],
+    )
+    run_pipeline(config, deps)
+
+    assert captured.get("command") == ["my_custom_entrypoint"], (
+        f"Expected explicit command, got: {captured.get('command')}"
+    )
+
+
+def test_subprocess_transport_does_not_inject_sleep_infinity():
+    """subprocess transport runs the server on the host; the container command
+    stays empty (None in docker-py) so the image's default CMD is used."""
+    import sys
+    from pathlib import Path
+
+    captured: dict = {}
+
+    class _CapturingContainers:
+        def run(self, **kwargs):
+            captured["command"] = kwargs.get("command")
+            return _FakeContainer()
+
+    class _CapturingDockerClient:
+        containers = _CapturingContainers()
+
+    fixture = Path(__file__).parent / "fixtures" / "echo_mcp_server.py"
+    deps = _base_deps(
+        docker_client_factory=lambda: _CapturingDockerClient(),
+        monitors_factory=lambda: [],
+        rules_factory=lambda: [],
+        prompts_factory=lambda: [],
+    )
+    config = _config(
+        mcp_transport="subprocess",
+        mcp_command=[sys.executable, str(fixture)],
+    )
+    run_pipeline(config, deps)
+
+    assert captured.get("command") is None, (
+        f"subprocess transport should not inject sleep infinity, got: {captured.get('command')}"
+    )
+
+
+# ── container_image override + tmpfs auto-wire ───────────────────────────
+
+
+def test_container_image_override_uses_custom_image():
+    """--container-image bypasses image_selector and uses the supplied image."""
+    captured: dict = {}
+
+    class _CapturingContainers:
+        def run(self, **kwargs):
+            captured["image"] = kwargs.get("image")
+            return _FakeContainer()
+
+    class _CapturingDockerClient:
+        containers = _CapturingContainers()
+
+    deps = _base_deps(
+        docker_client_factory=lambda: _CapturingDockerClient(),
+        # image_selector would normally be called but should be bypassed.
+        image_selector=lambda _p: "should-not-be-used:latest",
+    )
+    config = _config(
+        mcp_transport="docker",
+        mcp_command=["node", "dist/index.js"],
+        container_image="mcr.microsoft.com/playwright:v1.52.0-noble",
+    )
+    run_pipeline(config, deps)
+
+    assert captured.get("image") == "mcr.microsoft.com/playwright:v1.52.0-noble", (
+        f"Expected playwright image, got: {captured.get('image')}"
+    )
+
+
+def test_no_container_image_override_uses_image_selector():
+    """Without container_image, image_selector is called as normal."""
+    captured: dict = {}
+
+    class _CapturingContainers:
+        def run(self, **kwargs):
+            captured["image"] = kwargs.get("image")
+            return _FakeContainer()
+
+    class _CapturingDockerClient:
+        containers = _CapturingContainers()
+
+    deps = _base_deps(
+        docker_client_factory=lambda: _CapturingDockerClient(),
+        image_selector=lambda _p: "custom-selector-result:latest",
+    )
+    config = _config(
+        mcp_transport="docker",
+        mcp_command=["python", "server.py"],
+    )
+    run_pipeline(config, deps)
+
+    assert captured.get("image") == "custom-selector-result:latest", (
+        f"Expected selector result, got: {captured.get('image')}"
+    )
+
+
+def test_tmpfs_auto_wired_when_container_image_overridden():
+    """/tmp tmpfs is injected automatically when --container-image is set.
+    Browser runtimes (playwright, puppeteer) need a writable /tmp for crash
+    reports and lock files even when the root filesystem is read-only."""
+    captured: dict = {}
+
+    class _CapturingContainers:
+        def run(self, **kwargs):
+            captured["tmpfs"] = kwargs.get("tmpfs")
+            return _FakeContainer()
+
+    class _CapturingDockerClient:
+        containers = _CapturingContainers()
+
+    deps = _base_deps(
+        docker_client_factory=lambda: _CapturingDockerClient(),
+    )
+    config = _config(
+        mcp_transport="docker",
+        mcp_command=["node", "dist/index.js"],
+        container_image="mcr.microsoft.com/playwright:v1.52.0-noble",
+    )
+    run_pipeline(config, deps)
+
+    assert captured.get("tmpfs") == {"/tmp": "size=256m,exec", "/dev/shm": "size=512m"}, (
+        f"Expected /tmp (exec) and /dev/shm tmpfs mounts, got: {captured.get('tmpfs')}"
+    )
+
+
+def test_cap_add_sys_ptrace_auto_wired_when_container_image_overridden():
+    """SYS_PTRACE is added when --container-image is set so Chrome's Zygote
+    can trace renderer subprocesses (dropped by the cap_drop=['ALL'] baseline)."""
+    captured: dict = {}
+
+    class _CapturingContainers:
+        def run(self, **kwargs):
+            captured["cap_add"] = kwargs.get("cap_add")
+            return _FakeContainer()
+
+    class _CapturingDockerClient:
+        containers = _CapturingContainers()
+
+    deps = _base_deps(
+        docker_client_factory=lambda: _CapturingDockerClient(),
+    )
+    config = _config(
+        mcp_transport="docker",
+        mcp_command=["node", "dist/index.js"],
+        container_image="mcr.microsoft.com/playwright:v1.57.0-noble",
+    )
+    run_pipeline(config, deps)
+
+    assert captured.get("cap_add") == ["SYS_PTRACE"], (
+        f"Expected ['SYS_PTRACE'] in cap_add, got: {captured.get('cap_add')}"
+    )
+
+
+def test_shm_size_auto_wired_when_container_image_overridden():
+    """/dev/shm is bumped to 512m when --container-image is set.
+    Chrome's default 64 MB shm causes crashes on large pages."""
+    captured: dict = {}
+
+    class _CapturingContainers:
+        def run(self, **kwargs):
+            captured["shm_size"] = kwargs.get("shm_size")
+            return _FakeContainer()
+
+    class _CapturingDockerClient:
+        containers = _CapturingContainers()
+
+    deps = _base_deps(
+        docker_client_factory=lambda: _CapturingDockerClient(),
+    )
+    config = _config(
+        mcp_transport="docker",
+        mcp_command=["node", "dist/index.js"],
+        container_image="mcr.microsoft.com/playwright:v1.57.0-noble",
+    )
+    run_pipeline(config, deps)
+
+    assert captured.get("shm_size") == "512m", (
+        f"Expected shm_size='512m', got: {captured.get('shm_size')}"
+    )
+
+
+def test_cap_add_and_shm_not_set_without_container_image_override():
+    """Without a custom image, cap_add and shm_size stay at secure defaults."""
+    captured: dict = {}
+
+    class _CapturingContainers:
+        def run(self, **kwargs):
+            captured["cap_add"] = kwargs.get("cap_add")
+            captured["shm_size"] = kwargs.get("shm_size")
+            return _FakeContainer()
+
+    class _CapturingDockerClient:
+        containers = _CapturingContainers()
+
+    deps = _base_deps(
+        docker_client_factory=lambda: _CapturingDockerClient(),
+    )
+    config = _config(mcp_transport="docker", mcp_command=["node", "dist/index.js"])
+    run_pipeline(config, deps)
+
+    assert captured.get("cap_add") is None, (
+        "cap_add should not be set without container_image override"
+    )
+    assert captured.get("shm_size") is None, (
+        "shm_size should not be set without container_image override"
+    )
+
+
+def test_seccomp_unconfined_auto_set_when_container_image_overridden():
+    """seccomp=unconfined is needed for Chrome's namespace syscalls in Docker.
+    Automatically set when --container-image is used."""
+    captured: dict = {}
+
+    class _CapturingContainers:
+        def run(self, **kwargs):
+            captured["security_opt"] = kwargs.get("security_opt", [])
+            return _FakeContainer()
+
+    class _CapturingDockerClient:
+        containers = _CapturingContainers()
+
+    deps = _base_deps(
+        docker_client_factory=lambda: _CapturingDockerClient(),
+    )
+    config = _config(
+        mcp_transport="docker",
+        mcp_command=["node", "dist/index.js"],
+        container_image="mcr.microsoft.com/playwright:v1.57.0-noble",
+    )
+    run_pipeline(config, deps)
+
+    assert "seccomp=unconfined" in captured.get("security_opt", []), (
+        f"Expected seccomp=unconfined in security_opt, got: {captured.get('security_opt')}"
+    )
+    assert "no-new-privileges:true" in captured.get("security_opt", []), (
+        "no-new-privileges must be preserved alongside seccomp=unconfined"
+    )
+
+
+def test_writable_rootfs_when_container_image_overridden():
+    """Browser containers need a writable rootfs: Chrome's crashpad init
+    fails when it cannot write to /var/cache/fontconfig and crash database
+    paths that are not predictable enough to cover with tmpfs alone."""
+    captured: dict = {}
+
+    class _CapturingContainers:
+        def run(self, **kwargs):
+            captured["read_only"] = kwargs.get("read_only")
+            return _FakeContainer()
+
+    class _CapturingDockerClient:
+        containers = _CapturingContainers()
+
+    deps = _base_deps(
+        docker_client_factory=lambda: _CapturingDockerClient(),
+    )
+    config = _config(
+        mcp_transport="docker",
+        mcp_command=["node", "dist/index.js"],
+        container_image="mcr.microsoft.com/playwright:v1.57.0-noble",
+    )
+    run_pipeline(config, deps)
+
+    assert captured.get("read_only") is False, (
+        f"Expected read_only=False for browser container, got: {captured.get('read_only')}"
+    )
+
+
+def test_readonly_rootfs_without_container_image_override():
+    """Standard (non-browser) containers keep read_only=True for maximum hardening."""
+    captured: dict = {}
+
+    class _CapturingContainers:
+        def run(self, **kwargs):
+            captured["read_only"] = kwargs.get("read_only")
+            return _FakeContainer()
+
+    class _CapturingDockerClient:
+        containers = _CapturingContainers()
+
+    deps = _base_deps(
+        docker_client_factory=lambda: _CapturingDockerClient(),
+    )
+    config = _config(mcp_transport="docker", mcp_command=["node", "dist/index.js"])
+    run_pipeline(config, deps)
+
+    assert captured.get("read_only") is True, (
+        "Expected read_only=True without container_image override"
+    )
+
+
+def test_seccomp_confined_without_container_image_override():
+    """Without a custom image, seccomp=unconfined must NOT be added."""
+    captured: dict = {}
+
+    class _CapturingContainers:
+        def run(self, **kwargs):
+            captured["security_opt"] = kwargs.get("security_opt", [])
+            return _FakeContainer()
+
+    class _CapturingDockerClient:
+        containers = _CapturingContainers()
+
+    deps = _base_deps(
+        docker_client_factory=lambda: _CapturingDockerClient(),
+    )
+    config = _config(mcp_transport="docker", mcp_command=["node", "dist/index.js"])
+    run_pipeline(config, deps)
+
+    assert "seccomp=unconfined" not in captured.get("security_opt", [])
+
+
+def test_tmpfs_not_added_without_container_image_override():
+    """Without a custom image, no tmpfs is injected (default images don't need it)."""
+    captured: dict = {}
+
+    class _CapturingContainers:
+        def run(self, **kwargs):
+            captured["tmpfs"] = kwargs.get("tmpfs")
+            return _FakeContainer()
+
+    class _CapturingDockerClient:
+        containers = _CapturingContainers()
+
+    deps = _base_deps(
+        docker_client_factory=lambda: _CapturingDockerClient(),
+    )
+    config = _config(
+        mcp_transport="docker",
+        mcp_command=["node", "dist/index.js"],
+    )
+    run_pipeline(config, deps)
+
+    assert captured.get("tmpfs") is None, (
+        f"tmpfs should not be set without container_image override, got: {captured.get('tmpfs')}"
+    )
+
+
+def test_browser_image_startup_cmd_is_chrome_wrapper_not_sleep_infinity():
+    """When --container-image is set and no explicit command is given, the
+    container startup command is a /bin/sh -c script that writes a Chrome
+    --no-sandbox wrapper to /tmp, NOT bare 'sleep infinity'."""
+    captured: dict = {}
+
+    class _CapturingContainers:
+        def run(self, **kwargs):
+            captured["command"] = kwargs.get("command")
+            return _FakeContainer()
+
+    class _CapturingDockerClient:
+        containers = _CapturingContainers()
+
+    deps = _base_deps(
+        docker_client_factory=lambda: _CapturingDockerClient(),
+    )
+    config = _config(
+        mcp_transport="docker",
+        mcp_command=["node", "dist/index.js"],
+        container_image="mcr.microsoft.com/playwright:v1.57.0-noble",
+    )
+    run_pipeline(config, deps)
+
+    cmd = captured.get("command", [])
+    assert cmd[:2] == ["/bin/sh", "-c"], (
+        f"Expected startup via /bin/sh -c, got: {cmd}"
+    )
+    script = cmd[2] if len(cmd) > 2 else ""
+    assert "--no-sandbox" in script, "Chrome wrapper must include --no-sandbox"
+    assert "/tmp/chrome-wrapper" in script, "Wrapper must be written to /tmp/chrome-wrapper"
+    assert "sleep infinity" in script, "Must still sleep infinity after writing wrapper"
+
+
+def test_browser_image_injects_chrome_executable_path_env():
+    """CHROME_EXECUTABLE_PATH is set to /tmp/chrome-wrapper when
+    --container-image is used, so the server picks up our no-sandbox wrapper."""
+    captured: dict = {}
+
+    class _CapturingContainers:
+        def run(self, **kwargs):
+            captured["environment"] = kwargs.get("environment", {})
+            return _FakeContainer()
+
+    class _CapturingDockerClient:
+        containers = _CapturingContainers()
+
+    deps = _base_deps(
+        docker_client_factory=lambda: _CapturingDockerClient(),
+    )
+    config = _config(
+        mcp_transport="docker",
+        mcp_command=["node", "dist/index.js"],
+        container_image="mcr.microsoft.com/playwright:v1.57.0-noble",
+    )
+    run_pipeline(config, deps)
+
+    env = captured.get("environment", {})
+    assert env.get("CHROME_EXECUTABLE_PATH") == "/tmp/chrome-wrapper", (
+        f"Expected CHROME_EXECUTABLE_PATH=/tmp/chrome-wrapper, got: {env.get('CHROME_EXECUTABLE_PATH')}"
+    )
+
+
 def test_pythonpath_not_injected_without_env_monitor():
     """Without EnvironmentMonitor in the list, PYTHONPATH is not touched."""
     captured_env: dict = {}

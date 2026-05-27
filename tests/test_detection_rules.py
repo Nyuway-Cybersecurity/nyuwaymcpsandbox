@@ -129,8 +129,41 @@ def test_load_builtin_rules_returns_all_bundled():
         "credential_env_access",
         "suspicious_dns_tld",
         "file_write_outside_workdir",
+        "sensitive_file_read",
+        # Phase 6 additions (timing + tool-name signals).
+        "destructive_tool_invoked",
+        "slow_tool_response",
+        "pre_tool_network_activity",
     }
     assert expected.issubset(ids), f"missing: {expected - ids}"
+
+
+def test_destructive_tool_invoked_rule_loads_with_expected_severity():
+    rules = {r.id: r for r in load_builtin_rules()}
+    rule = rules["destructive_tool_invoked"]
+    assert rule.severity == "high"
+    assert rule.weight == 20
+    assert rule.category == "state_mutation"
+    # The rule must match the mcp.tool_invocation event type.
+    assert any(p.type == "mcp.tool_invocation" for p in rule.event_patterns)
+
+
+def test_slow_tool_response_rule_loads_as_informational():
+    rules = {r.id: r for r in load_builtin_rules()}
+    rule = rules["slow_tool_response"]
+    assert rule.severity == "low"
+    assert rule.weight == 5
+    assert rule.category == "reliability"
+    assert any(p.type == "mcp.slow_tool_response" for p in rule.event_patterns)
+
+
+def test_pre_tool_network_activity_rule_loads_medium_severity():
+    rules = {r.id: r for r in load_builtin_rules()}
+    rule = rules["pre_tool_network_activity"]
+    assert rule.severity == "medium"
+    assert rule.weight == 15
+    assert rule.category == "stealth_behavior"
+    assert any(p.type == "mcp.delayed_initialization" for p in rule.event_patterns)
 
 
 # ── Match expressions ─────────────────────────────────────────────────────

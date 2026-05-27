@@ -139,6 +139,62 @@ def test_run_kwargs_detached(tmp_path):
     assert kw["detach"] is True
 
 
+def test_run_kwargs_no_tmpfs_by_default(tmp_path):
+    kw = _build_run_kwargs(_config(tmp_path))
+    assert "tmpfs" not in kw
+
+
+def test_run_kwargs_tmpfs_included_when_set(tmp_path):
+    kw = _build_run_kwargs(_config(tmp_path, tmpfs={"/tmp": "size=256m"}))
+    assert kw["tmpfs"] == {"/tmp": "size=256m"}
+
+
+def test_run_kwargs_tmpfs_multiple_mounts(tmp_path):
+    kw = _build_run_kwargs(_config(tmp_path, tmpfs={"/tmp": "size=128m", "/run": "size=64m"}))
+    assert kw["tmpfs"] == {"/tmp": "size=128m", "/run": "size=64m"}
+
+
+def test_run_kwargs_no_cap_add_by_default(tmp_path):
+    kw = _build_run_kwargs(_config(tmp_path))
+    assert "cap_add" not in kw
+
+
+def test_run_kwargs_cap_add_included_when_set(tmp_path):
+    kw = _build_run_kwargs(_config(tmp_path, cap_add=["SYS_PTRACE"]))
+    assert kw["cap_add"] == ["SYS_PTRACE"]
+
+
+def test_run_kwargs_no_shm_size_by_default(tmp_path):
+    kw = _build_run_kwargs(_config(tmp_path))
+    assert "shm_size" not in kw
+
+
+def test_run_kwargs_shm_size_included_when_set(tmp_path):
+    kw = _build_run_kwargs(_config(tmp_path, shm_size="512m"))
+    assert kw["shm_size"] == "512m"
+
+
+def test_run_kwargs_seccomp_unconfined_false_by_default(tmp_path):
+    kw = _build_run_kwargs(_config(tmp_path))
+    assert "seccomp=unconfined" not in kw.get("security_opt", [])
+
+
+def test_run_kwargs_seccomp_unconfined_appended_when_set(tmp_path):
+    kw = _build_run_kwargs(_config(tmp_path, seccomp_unconfined=True))
+    assert "seccomp=unconfined" in kw["security_opt"]
+    assert "no-new-privileges:true" in kw["security_opt"]
+
+
+def test_run_kwargs_read_only_true_by_default(tmp_path):
+    kw = _build_run_kwargs(_config(tmp_path))
+    assert kw["read_only"] is True
+
+
+def test_run_kwargs_read_only_false_when_allow_writable_rootfs(tmp_path):
+    kw = _build_run_kwargs(_config(tmp_path, allow_writable_rootfs=True))
+    assert kw["read_only"] is False
+
+
 def test_run_kwargs_passes_environment(tmp_path):
     kw = _build_run_kwargs(_config(tmp_path, env={"FOO": "bar"}))
     assert kw["environment"] == {"FOO": "bar"}

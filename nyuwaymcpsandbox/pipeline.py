@@ -163,6 +163,14 @@ class PipelineConfig:
     # Required by both real transports; empty means rely on the fake
     # injected by --dry-run.
     mcp_command: list[str] = field(default_factory=list)
+    # Override the auto-selected container image. When None, image_selector
+    # picks the right base image from the source tree (python:3.12-slim or
+    # node:20-slim). Set this for servers that need a non-default runtime
+    # (e.g. "mcr.microsoft.com/playwright:v1.52.0-noble" for browser-based
+    # MCP servers). When set, /tmp is automatically exposed as a writable
+    # tmpfs mount so browser runtimes can write crash reports and lock files
+    # while the rest of the root filesystem stays read-only.
+    container_image: str | None = None
 
 
 @dataclass
@@ -214,7 +222,10 @@ def run_pipeline(config: PipelineConfig, deps: PipelineDeps | None = None) -> Pi
     timeline = BehavioralTimeline()
 
     with deps.source_resolver(config.target) as local_path:
-        image = deps.image_selector(local_path)
+        # Use the caller-supplied image when set; otherwise auto-select from
+        # the source tree. The override is the escape hatch for servers that
+        # need a non-default runtime (e.g. browser-capable playwright image).
+        image = config.container_image or deps.image_selector(local_path)
 
         # Build monitors before ContainerConfig so we can inspect the list
         # and auto-wire PYTHONPATH when EnvironmentMonitor is active.
@@ -234,12 +245,84 @@ def run_pipeline(config: PipelineConfig, deps: PipelineDeps | None = None) -> Pi
         ):
             container_env["PYTHONPATH"] = "/nyuway_runtime"
 
+        # When a custom container image is specified, assume a browser-based
+        # server and auto-wire the settings Chromium needs inside Docker:
+        #
+        #   /tmp  tmpfs     — writable temp dir for crash reports / lock files
+        #   /dev/shm tmpfs  — Chrome's default 64 MB shm is too small;
+        #                     512 MB is the standard recommendation
+        #   SYS_PTRACE      — Chrome's Zygote needs to ptrace renderer
+        #                     subprocesses; dropped by cap_drop=['ALL']
+        #   Chrome wrapper  — Chrome's namespace sandbox (CLONE_NEWUSER) still
+        #                     fails with cap_drop=['ALL']+SYS_PTRACE; Chrome must
+        #                     start with --no-sandbox. We write a /tmp/chrome wrapper
+        #                     that prepends --no-sandbox and point CHROME_EXECUTABLE_PATH
+        #                     to it. Running the full container sandbox as the outer
+        #                     isolation layer makes --no-sandbox acceptable here.
+        #
+        # All other security defaults remain: network sinkholed, root
+        # filesystem read-only, no-new-privileges, resource caps.
+        tmpfs: dict[str, str] = {}
+        cap_add: list[str] = []
+        shm_size: str | None = None
+        seccomp_unconfined = False
+        if config.container_image:
+            # exec is required so the Chrome --no-sandbox wrapper script
+            # written to /tmp can be executed. Default tmpfs is noexec.
+            tmpfs["/tmp"] = "size=256m,exec"
+            tmpfs["/dev/shm"] = "size=512m"
+            cap_add = ["SYS_PTRACE"]
+            shm_size = "512m"
+            # Docker's default seccomp profile blocks clone(CLONE_NEWNS) and
+            # related namespace syscalls that Chrome uses even with --no-sandbox.
+            # seccomp=unconfined is the standard Docker recommendation for
+            # browser containers.
+            seccomp_unconfined = True
+
+        # Docker transport: the container must stay alive while docker exec
+        # runs the MCP server command. Without a long-running startup
+        # command the container exits immediately using the image's default
+        # CMD (node / python3 REPL with no stdin), and exec_create returns
+        # 409 "container is not running". Explicit config.command always
+        # takes precedence so callers can override the keep-alive if needed.
+        #
+        # For browser-capable containers we also write a Chrome wrapper to
+        # /tmp that adds --no-sandbox (required when Chrome's user-namespace
+        # sandbox is blocked by cap_drop=['ALL']). The Docker container is
+        # the outer sandbox; disabling Chrome's inner sandbox is acceptable.
+        if config.mcp_transport == "docker" and not config.command:
+            if config.container_image:
+                # Create wrapper first, then stay alive.
+                # /ms-playwright is the Playwright Docker image's browser root.
+                chrome_bin = "/ms-playwright/chromium-1200/chrome-linux64/chrome"
+                # --user-data-dir redirects the Chrome profile (normally
+                # ~/.config/chromium) into /tmp so the read-only rootfs
+                # doesn't block Chrome's first-run profile creation.
+                wrapper_cmd = (
+                    f"printf '#!/bin/sh\\nexec {chrome_bin} --no-sandbox"
+                    f" --disable-dev-shm-usage"
+                    f" --user-data-dir=/tmp/chrome-profile \"$@\"\\n'"
+                    f" > /tmp/chrome-wrapper"
+                    f" && chmod +x /tmp/chrome-wrapper && sleep infinity"
+                )
+                startup_cmd: list[str] = ["/bin/sh", "-c", wrapper_cmd]
+                container_env["CHROME_EXECUTABLE_PATH"] = "/tmp/chrome-wrapper"
+            else:
+                startup_cmd = ["sleep", "infinity"]
+        else:
+            startup_cmd = list(config.command)
+
         container_config = ContainerConfig(
             image=image,
             source_path=local_path,
-            command=list(config.command),
+            command=startup_cmd,
             allow_network=config.allow_network,
             env=container_env,
+            tmpfs=tmpfs,
+            cap_add=cap_add,
+            shm_size=shm_size,
+            seccomp_unconfined=seccomp_unconfined,
+            allow_writable_rootfs=bool(config.container_image),
         )
         with container_session(
             container_config,

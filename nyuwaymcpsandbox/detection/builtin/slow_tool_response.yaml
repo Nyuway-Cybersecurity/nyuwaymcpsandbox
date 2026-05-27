@@ -1,0 +1,31 @@
+id: slow_tool_response
+title: MCP tool call took longer than 30 seconds to return
+severity: low
+weight: 5
+category: reliability
+description: |
+  A single tool invocation took 30 seconds or longer to return. The
+  deterministic harness records the wall-clock duration of every tool
+  call; an mcp.slow_tool_response event is emitted whenever that
+  duration crosses the threshold.
+
+  Slow tool responses are usually a reliability/UX issue rather than a
+  direct security failure, but they earn an informational finding for
+  two reasons:
+
+  1. A tool that hangs on adversarial input is a denial-of-service
+     vector against agents that don't enforce their own call timeouts.
+  2. Persistent slowness often indicates the tool is doing work it
+     shouldn't (e.g. retrying an outbound connection, attempting a
+     credential lookup) before returning to the caller.
+recommendation: |
+  Inspect the timeline for the offending tool name. If the slowness
+  reproduces, instrument the agent host with a per-call timeout and
+  decide whether the tool's hang behaviour is acceptable. Pair this
+  finding with outbound_network_from_tool to surface tools that stall
+  while attempting blocked network operations.
+detection:
+  events:
+    - type: mcp.slow_tool_response
+  threshold:
+    count: 1
