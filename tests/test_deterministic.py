@@ -14,7 +14,15 @@ import pytest
 from nyuwaymcpsandbox.drivers.deterministic import run_deterministic_harness
 from nyuwaymcpsandbox.drivers.mcp_client import McpTool, McpToolResult
 from nyuwaymcpsandbox.drivers.synth import PROBE_STRING
-from nyuwaymcpsandbox.sandbox.events import EVT_MCP_TOOL_INVOKE, EVT_MCP_TOOL_LIST
+from nyuwaymcpsandbox.sandbox.events import (
+    EVT_CONTAINER_STARTED,
+    EVT_MCP_DELAYED_INIT,
+    EVT_MCP_SLOW_TOOL,
+    EVT_MCP_TOOL_INVOKE,
+    EVT_MCP_TOOL_LIST,
+    SRC_CONTAINER,
+    BehavioralEvent,
+)
 from nyuwaymcpsandbox.sandbox.timeline import BehavioralTimeline
 
 
@@ -183,3 +191,213 @@ def test_summary_counts_match_events():
     assert summary.tool_count == 5
     assert summary.invocations_attempted == 5
     assert summary.invocations_failed == 1
+
+
+# ── Derived timing signals: mcp.slow_tool_response ───────────────────────
+
+
+def _stepped_clock(steps):
+    """Return a clock callable that advances through a fixed sequence."""
+    state = {"i": 0, "steps": list(steps)}
+
+    def _now() -> float:
+        i = state["i"]
+        if i >= len(state["steps"]):
+            return state["steps"][-1]
+        state["i"] += 1
+        return state["steps"][i]
+
+    return _now
+
+
+def test_slow_tool_event_emitted_when_call_exceeds_threshold():
+    """A single call_tool that takes >= threshold seconds emits one event.
+
+    Clock-call ordering inside the harness for a one-tool successful run:
+      1. list_call_started_at
+      2. list_event_ts
+      3. call_started_at
+      4. clock used to compute duration_seconds (after call_tool returns)
+      5. clock used to compute emit_at_ts (passed to _maybe_emit_slow_tool)
+    """
+    timeline = BehavioralTimeline()
+    client = FakeMcpClient(tools=[McpTool(name="slow")])
+    clock = _stepped_clock([100.0, 100.0, 100.0, 145.0, 145.0])
+    run_deterministic_harness(
+        client,
+        timeline,
+        scan_start=100.0,
+        slow_tool_threshold_seconds=30.0,
+        delayed_init_threshold_seconds=60.0,
+        clock=clock,
+    )
+    slow_events = [e for e in timeline.events if e.type == EVT_MCP_SLOW_TOOL]
+    assert len(slow_events) == 1
+    payload = slow_events[0].payload
+    assert payload["name"] == "slow"
+    assert payload["duration_seconds"] == 45.0
+    assert payload["threshold_seconds"] == 30.0
+
+
+def test_fast_tool_does_not_emit_slow_event():
+    """Calls under the threshold leave the slow_tool_response stream empty."""
+    timeline = BehavioralTimeline()
+    client = FakeMcpClient(tools=[McpTool(name="fast")])
+    clock = _stepped_clock([100.0, 100.0, 100.0, 100.5, 100.5])
+    run_deterministic_harness(
+        client,
+        timeline,
+        scan_start=100.0,
+        slow_tool_threshold_seconds=30.0,
+        delayed_init_threshold_seconds=60.0,
+        clock=clock,
+    )
+    assert [e for e in timeline.events if e.type == EVT_MCP_SLOW_TOOL] == []
+
+
+def test_slow_tool_event_emitted_when_tool_raises():
+    """A call_tool that raises after the threshold still emits the event."""
+    timeline = BehavioralTimeline()
+    client = FakeMcpClient(
+        tools=[McpTool(name="hangs_then_fails")],
+        call_exceptions={"hangs_then_fails": ConnectionResetError("hung")},
+    )
+    clock = _stepped_clock([100.0, 100.0, 100.0, 140.0, 140.0])
+    run_deterministic_harness(
+        client,
+        timeline,
+        scan_start=100.0,
+        slow_tool_threshold_seconds=30.0,
+        delayed_init_threshold_seconds=60.0,
+        clock=clock,
+    )
+    slow_events = [e for e in timeline.events if e.type == EVT_MCP_SLOW_TOOL]
+    assert len(slow_events) == 1
+    assert slow_events[0].payload["name"] == "hangs_then_fails"
+
+
+def test_slow_tool_event_triggered_by_call_event():
+    """The slow_tool_response event must link back to the tool_invocation."""
+    timeline = BehavioralTimeline()
+    client = FakeMcpClient(tools=[McpTool(name="slow")])
+    clock = _stepped_clock([100.0, 100.0, 100.0, 145.0, 145.0])
+    run_deterministic_harness(
+        client,
+        timeline,
+        scan_start=100.0,
+        slow_tool_threshold_seconds=30.0,
+        delayed_init_threshold_seconds=60.0,
+        clock=clock,
+    )
+    invoke = next(e for e in timeline.events if e.type == EVT_MCP_TOOL_INVOKE)
+    slow = next(e for e in timeline.events if e.type == EVT_MCP_SLOW_TOOL)
+    assert slow.triggered_by == invoke.event_id
+
+
+def test_duration_seconds_always_recorded_on_invocation_event():
+    """Even fast calls should record duration_seconds for downstream tools."""
+    timeline = BehavioralTimeline()
+    client = FakeMcpClient(tools=[McpTool(name="a"), McpTool(name="b")])
+    run_deterministic_harness(client, timeline, scan_start=time.monotonic())
+    invokes = [e for e in timeline.events if e.type == EVT_MCP_TOOL_INVOKE]
+    assert all("duration_seconds" in e.payload for e in invokes)
+    assert all(isinstance(e.payload["duration_seconds"], float) for e in invokes)
+
+
+# ── Derived timing signals: mcp.delayed_initialization ───────────────────
+
+
+def test_delayed_init_emitted_when_startup_exceeds_threshold():
+    """tools/list that completes more than threshold seconds after the upstream
+    event fires an mcp.delayed_initialization event."""
+    timeline = BehavioralTimeline()
+    upstream = BehavioralEvent(
+        type=EVT_CONTAINER_STARTED,
+        source=SRC_CONTAINER,
+        timestamp=0.0,
+        payload={},
+    )
+    timeline.add(upstream)
+    client = FakeMcpClient(tools=[])
+    # First clock call sets list_call_started_at; second sets list_event_ts;
+    # subsequent calls aren't needed because the tool list is empty.
+    clock = _stepped_clock([100.0, 175.0])
+    run_deterministic_harness(
+        client,
+        timeline,
+        scan_start=100.0,
+        triggered_by=upstream.event_id,
+        slow_tool_threshold_seconds=30.0,
+        delayed_init_threshold_seconds=60.0,
+        clock=clock,
+    )
+    delayed = [e for e in timeline.events if e.type == EVT_MCP_DELAYED_INIT]
+    assert len(delayed) == 1
+    payload = delayed[0].payload
+    assert payload["startup_seconds"] == 75.0
+    assert payload["threshold_seconds"] == 60.0
+
+
+def test_delayed_init_not_emitted_for_fast_startup():
+    timeline = BehavioralTimeline()
+    upstream = BehavioralEvent(
+        type=EVT_CONTAINER_STARTED,
+        source=SRC_CONTAINER,
+        timestamp=0.0,
+        payload={},
+    )
+    timeline.add(upstream)
+    client = FakeMcpClient(tools=[])
+    clock = _stepped_clock([100.0, 102.0])
+    run_deterministic_harness(
+        client,
+        timeline,
+        scan_start=100.0,
+        triggered_by=upstream.event_id,
+        slow_tool_threshold_seconds=30.0,
+        delayed_init_threshold_seconds=60.0,
+        clock=clock,
+    )
+    assert [e for e in timeline.events if e.type == EVT_MCP_DELAYED_INIT] == []
+
+
+def test_delayed_init_uses_scan_start_when_upstream_missing():
+    """No upstream id -> fall back to scan_start as the baseline."""
+    timeline = BehavioralTimeline()
+    client = FakeMcpClient(tools=[])
+    clock = _stepped_clock([100.0, 175.0])
+    run_deterministic_harness(
+        client,
+        timeline,
+        scan_start=100.0,
+        triggered_by=None,
+        slow_tool_threshold_seconds=30.0,
+        delayed_init_threshold_seconds=60.0,
+        clock=clock,
+    )
+    delayed = [e for e in timeline.events if e.type == EVT_MCP_DELAYED_INIT]
+    assert len(delayed) == 1
+    assert delayed[0].payload["startup_seconds"] == 75.0
+
+
+def test_delayed_init_links_back_to_upstream_event():
+    timeline = BehavioralTimeline()
+    upstream = BehavioralEvent(
+        type=EVT_CONTAINER_STARTED,
+        source=SRC_CONTAINER,
+        timestamp=0.0,
+        payload={},
+    )
+    timeline.add(upstream)
+    client = FakeMcpClient(tools=[])
+    clock = _stepped_clock([100.0, 175.0])
+    run_deterministic_harness(
+        client,
+        timeline,
+        scan_start=100.0,
+        triggered_by=upstream.event_id,
+        delayed_init_threshold_seconds=60.0,
+        clock=clock,
+    )
+    delayed = next(e for e in timeline.events if e.type == EVT_MCP_DELAYED_INIT)
+    assert delayed.triggered_by == upstream.event_id

@@ -122,6 +122,14 @@ def cli():
     'Example: --mcp-arg python --mcp-arg "C:\\Users\\me\\server.py"',
 )
 @click.option(
+    "--container-image",
+    default=None,
+    help="Override the auto-selected container image. Use for servers that require a "
+    "non-default runtime, e.g. 'mcr.microsoft.com/playwright:v1.52.0-noble' for "
+    "browser-based MCP servers. When set, /tmp is automatically exposed as a writable "
+    "tmpfs mount (256 MB) so browser runtimes can write temp files.",
+)
+@click.option(
     "--dry-run",
     is_flag=True,
     help="Run the pipeline with in-memory fakes instead of real Docker / MCP / LLM transports. "
@@ -138,6 +146,7 @@ def detonate(
     mcp_transport,
     mcp_command,
     mcp_args,
+    container_image,
     dry_run,
 ):
     """Detonate an MCP server in a sandboxed container and record behavior.
@@ -167,6 +176,7 @@ def detonate(
         allow_network=allow_network,
         mcp_transport=mcp_transport,
         mcp_command=resolved_command,
+        container_image=container_image,
     )
 
     deps = PipelineDeps()

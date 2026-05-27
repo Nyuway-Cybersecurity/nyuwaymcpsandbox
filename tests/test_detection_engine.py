@@ -9,6 +9,8 @@ from nyuwaymcpsandbox.detection.rules import (
 from nyuwaymcpsandbox.sandbox.events import (
     EVT_ENV_READ,
     EVT_FS_WRITE,
+    EVT_MCP_DELAYED_INIT,
+    EVT_MCP_SLOW_TOOL,
     EVT_MCP_TOOL_INVOKE,
     EVT_NETWORK_DNS,
     EVT_NETWORK_HTTP,
@@ -297,3 +299,85 @@ def test_clean_timeline_produces_no_findings():
     tl = _tl(tool)
     findings = evaluate_rules(rules, tl)
     assert findings == []
+
+
+# ── Phase 6 rules: destructive_tool_invoked ──────────────────────────────
+
+
+def test_destructive_tool_rule_fires_on_git_commit():
+    rules = load_builtin_rules()
+    tool = _evt(EVT_MCP_TOOL_INVOKE, SRC_MCP_CLIENT, 0.1, payload={"name": "git_commit"})
+    findings = evaluate_rules(rules, _tl(tool))
+    assert "destructive_tool_invoked" in {f.rule_id for f in findings}
+
+
+def test_destructive_tool_rule_fires_on_kubectl_delete():
+    rules = load_builtin_rules()
+    tool = _evt(EVT_MCP_TOOL_INVOKE, SRC_MCP_CLIENT, 0.1, payload={"name": "kubectl_delete"})
+    findings = evaluate_rules(rules, _tl(tool))
+    assert "destructive_tool_invoked" in {f.rule_id for f in findings}
+
+
+def test_destructive_tool_rule_fires_on_exec_in_pod():
+    rules = load_builtin_rules()
+    tool = _evt(EVT_MCP_TOOL_INVOKE, SRC_MCP_CLIENT, 0.1, payload={"name": "exec_in_pod"})
+    findings = evaluate_rules(rules, _tl(tool))
+    assert "destructive_tool_invoked" in {f.rule_id for f in findings}
+
+
+def test_destructive_tool_rule_does_not_fire_on_read_only_tools():
+    """git_status, git_log, kubectl_get must not flag destructive."""
+    rules = load_builtin_rules()
+    safe_names = ["git_status", "git_log", "git_diff", "kubectl_get", "kubectl_describe", "fetch"]
+    for name in safe_names:
+        tl = _tl(_evt(EVT_MCP_TOOL_INVOKE, SRC_MCP_CLIENT, 0.1, payload={"name": name}))
+        findings = evaluate_rules(rules, tl)
+        assert "destructive_tool_invoked" not in {f.rule_id for f in findings}, (
+            f"destructive_tool_invoked false-fired on {name}"
+        )
+
+
+# ── Phase 6 rules: slow_tool_response ────────────────────────────────────
+
+
+def test_slow_tool_rule_fires_when_slow_event_present():
+    rules = load_builtin_rules()
+    slow = _evt(
+        EVT_MCP_SLOW_TOOL,
+        SRC_MCP_CLIENT,
+        45.0,
+        payload={"name": "puppeteer_select", "duration_seconds": 30.5, "threshold_seconds": 30.0},
+    )
+    findings = evaluate_rules(rules, _tl(slow))
+    assert "slow_tool_response" in {f.rule_id for f in findings}
+
+
+def test_slow_tool_rule_does_not_fire_without_slow_event():
+    rules = load_builtin_rules()
+    # An invocation event alone (no slow follow-up) must not fire the rule.
+    tool = _evt(EVT_MCP_TOOL_INVOKE, SRC_MCP_CLIENT, 0.1, payload={"name": "x"})
+    findings = evaluate_rules(rules, _tl(tool))
+    assert "slow_tool_response" not in {f.rule_id for f in findings}
+
+
+# ── Phase 6 rules: pre_tool_network_activity ─────────────────────────────
+
+
+def test_pre_tool_network_activity_rule_fires_on_delayed_init():
+    rules = load_builtin_rules()
+    delayed = _evt(
+        EVT_MCP_DELAYED_INIT,
+        SRC_MCP_CLIENT,
+        160.0,
+        payload={"startup_seconds": 158.4, "threshold_seconds": 60.0},
+    )
+    findings = evaluate_rules(rules, _tl(delayed))
+    assert "pre_tool_network_activity" in {f.rule_id for f in findings}
+
+
+def test_pre_tool_network_activity_rule_silent_on_fast_startup():
+    rules = load_builtin_rules()
+    # No delayed_init event at all -> rule must be silent.
+    tool = _evt(EVT_MCP_TOOL_INVOKE, SRC_MCP_CLIENT, 0.1)
+    findings = evaluate_rules(rules, _tl(tool))
+    assert "pre_tool_network_activity" not in {f.rule_id for f in findings}
