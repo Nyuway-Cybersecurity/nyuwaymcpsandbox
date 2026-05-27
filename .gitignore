@@ -2,6 +2,9 @@
 *_project.md
 *_internal.md
 *_confidential.md
+PROJECT_ACTIVITY.md
+ROADMAP.md
+CHANGELOG.md
 *.key
 *.pem
 .env
