@@ -18,7 +18,7 @@ Verdict:  LOW  (score 20/100)              Duration: 00:02   Findings: 1
 | 00:02 | X | Tool 'git_reset'  invoked   [DETECTION: destructive_tool_invoked]
 ```
 
-> **v1.0.0 — first stable release.** Core pipeline working end-to-end on Linux, macOS, and Windows (Docker Desktop + WSL2). **513 unit tests passing**, **9 bundled detection rules**, **14 public MCP servers detonated** across Docker and subprocess modes. See [CHANGELOG.md](CHANGELOG.md) for what shipped, [ROADMAP.md](ROADMAP.md) for what's next.
+> **v1.0.0 — first stable release.** Core pipeline working end-to-end on Linux, macOS, and Windows (Docker Desktop + WSL2). **513 unit tests passing**, **9 bundled detection rules**, **14 public MCP servers detonated** across Docker and subprocess modes. See the [GitHub releases page](https://github.com/Nyuway-Cybersecurity/nyuwaymcpsandbox/releases) for release notes.
 
 ---
 
@@ -317,7 +317,7 @@ We are deliberate about scope. A behavioral sandbox is one layer in a defence-in
 
 A PASS verdict means **no rule fired against the captured timeline**. It does not mean the server is safe for every deployment context — only that, within the limits above, no malicious behaviour was observed.
 
-See [ROADMAP.md](ROADMAP.md) for everything we know is missing and when it's scheduled.
+What's planned next is summarised in the [GitHub releases page](https://github.com/Nyuway-Cybersecurity/nyuwaymcpsandbox/releases) and tracked via GitHub issues.
 
 ---
 
@@ -412,5 +412,4 @@ Apache 2.0. See [LICENSE](LICENSE).
 - Website: https://nyuway.ai
 - Static scanner: https://github.com/Nyuway-Cybersecurity/nyuwaymcpscanner
 - Issues: https://github.com/Nyuway-Cybersecurity/nyuwaymcpsandbox/issues
-- Roadmap: [ROADMAP.md](ROADMAP.md)
-- Changelog: [CHANGELOG.md](CHANGELOG.md)
+- Releases: https://github.com/Nyuway-Cybersecurity/nyuwaymcpsandbox/releases
