@@ -29,6 +29,12 @@ Payload match expressions:
     "contains:foo"      substring match (case sensitive)
     "regex:foo.*"       Python regex match
     "any"               key must exist, value can be anything
+    "absent"            key must be missing OR value must be None / empty string
+
+The ``absent`` expression is how rules express negative guards.  For
+example, the sensitive_file_read rule uses ``error: absent`` to ensure
+the rule only fires when the tool call actually succeeded (not when
+the server errored out before any file was touched).
 
 Nested payload keys use dot notation: "argv.0" means payload["argv"][0].
 """
@@ -221,11 +227,17 @@ def load_builtin_rules() -> list[DetectionRule]:
 def evaluate_match_expression(expression: str, value: Any) -> bool:
     """Evaluate a payload match expression against an actual value.
 
-    Supports: "literal", "contains:foo", "regex:foo", "any".
-    Returns False if the value is None.
+    Supports: "literal", "contains:foo", "regex:foo", "any", "absent".
+    Returns False if the value is None unless the expression is "absent".
     """
+    if expression == "absent":
+        # Matches when the key is missing or the value is None/empty string.
+        # Used by rules that need to assert "no error occurred", e.g. so
+        # sensitive_file_read only fires on a successful tool call.
+        return value is None or value == ""
+
     if value is None:
-        # Missing key never matches anything, including "any". A pattern
+        # Missing key never matches anything else, including "any". A pattern
         # that needs to assert presence should use "any"; absence stays a
         # non-match.
         return False

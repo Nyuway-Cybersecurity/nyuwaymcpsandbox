@@ -78,7 +78,7 @@ class StdioMcpClient:
         stream: StdioStream,
         *,
         client_name: str = "nyuwaymcpsandbox",
-        client_version: str = "1.0.1",
+        client_version: str = "1.0.2",
     ) -> None:
         self._stream = stream
         self._next_id = 1
