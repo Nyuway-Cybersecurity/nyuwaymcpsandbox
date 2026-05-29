@@ -25,6 +25,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from nyuwaymcpsandbox.detection.engine import evaluate_rules
 from nyuwaymcpsandbox.detection.rules import DetectionRule, load_builtin_rules
@@ -59,7 +60,7 @@ class PipelineNotReady(Exception):
     """A real transport or backend is required but not yet wired."""
 
 
-def _npm_install_on_host(source_path: "Path") -> None:
+def _npm_install_on_host(source_path: Path) -> None:
     """Run ``npm install --production`` in *source_path* on the host.
 
     Published npm tarballs never include node_modules.  We install them
