@@ -274,3 +274,75 @@ def test_sensitive_file_read_does_not_fire_for_memory_graph_tools():
     assert "sensitive_file_read" not in fired_ids, (
         f"sensitive_file_read fired as FP on memory graph tools: {fired_ids}"
     )
+
+
+def test_sensitive_file_read_does_not_fire_when_call_errored():
+    """Regression: a tool call that errored out must NOT trigger
+    sensitive_file_read - no file was actually read.
+
+    Real FP discovered during the v1.1 research campaign against the
+    official @modelcontextprotocol/server-gitlab.  An adversarial LLM
+    prompt convinced the model to call ``get_file_contents`` (a GitLab
+    *repo* file reader) with ``file_path="/etc/passwd"``.  The call
+    failed - the GitLab API returned an error and the server's response
+    handler NPE'd - so no file was touched.  The rule was firing purely
+    on argument shape, ignoring the call result.  After the v1.0.2 fix
+    the rule requires ``error: absent`` and stays quiet here.
+    """
+    tl = BehavioralTimeline()
+    tl.add(
+        _evt(
+            EVT_MCP_TOOL_INVOKE,
+            SRC_MCP_CLIENT,
+            {
+                "name": "get_file_contents",
+                "arguments": {"file_path": "/etc/passwd", "project": "test_project"},
+                "error": "Cannot read properties of undefined (reading 'map')",
+            },
+        )
+    )
+    tl.add(
+        _evt(
+            EVT_MCP_TOOL_INVOKE,
+            SRC_MCP_CLIENT,
+            {
+                "name": "get_file_contents",
+                "arguments": {"file_path": ".env", "project": "sandbox"},
+                "error": "Cannot read properties of undefined (reading 'map')",
+            },
+        )
+    )
+
+    rules = load_builtin_rules()
+    findings = evaluate_rules(rules, tl)
+    fired_ids = {f.rule_id for f in findings}
+    assert "sensitive_file_read" not in fired_ids, (
+        "sensitive_file_read fired on an errored call - no file was actually read. "
+        f"Findings: {fired_ids}"
+    )
+
+
+def test_sensitive_file_read_still_fires_when_call_succeeded():
+    """Companion to the FP regression above: the rule MUST still fire
+    when the tool call succeeded with a sensitive path - that is the
+    real credential-harvest signal we care about.
+    """
+    tl = BehavioralTimeline()
+    tl.add(
+        _evt(
+            EVT_MCP_TOOL_INVOKE,
+            SRC_MCP_CLIENT,
+            {
+                "name": "read_file",
+                "arguments": {"path": "/etc/passwd"},
+                "result_summary": "[{'type': 'text', 'text': 'root:x:0:0:root...'}]",
+            },
+        )
+    )
+
+    rules = load_builtin_rules()
+    findings = evaluate_rules(rules, tl)
+    fired_ids = {f.rule_id for f in findings}
+    assert "sensitive_file_read" in fired_ids, (
+        f"sensitive_file_read should fire on successful sensitive read. Findings: {fired_ids}"
+    )

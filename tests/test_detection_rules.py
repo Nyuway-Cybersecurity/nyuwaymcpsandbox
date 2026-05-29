@@ -157,11 +157,16 @@ def test_slow_tool_response_rule_loads_as_informational():
     assert any(p.type == "mcp.slow_tool_response" for p in rule.event_patterns)
 
 
-def test_pre_tool_network_activity_rule_loads_medium_severity():
+def test_pre_tool_network_activity_rule_loads_low_severity():
+    """Rule was downgraded from medium/15 to low/5 in v1.0.2 after the
+    research campaign showed it fires on legitimate startup behavior
+    (e.g. a Discord MCP server logging in to discord.com during init).
+    Long startup alone is informational, not conclusive.
+    """
     rules = {r.id: r for r in load_builtin_rules()}
     rule = rules["pre_tool_network_activity"]
-    assert rule.severity == "medium"
-    assert rule.weight == 15
+    assert rule.severity == "low"
+    assert rule.weight == 5
     assert rule.category == "stealth_behavior"
     assert any(p.type == "mcp.delayed_initialization" for p in rule.event_patterns)
 
@@ -198,6 +203,18 @@ def test_match_expression_any_requires_present_value():
 def test_match_expression_none_value_otherwise_false():
     assert not evaluate_match_expression("foo", None)
     assert not evaluate_match_expression("contains:foo", None)
+
+
+def test_match_expression_absent_matches_missing_and_empty():
+    """The ``absent`` expression is the only way a rule can express
+    "this key must be missing or empty" - used by rules that need
+    a negative guard (e.g. ``error: absent`` for "call succeeded")."""
+    assert evaluate_match_expression("absent", None)
+    assert evaluate_match_expression("absent", "")
+    # Any non-empty value must NOT match absent.
+    assert not evaluate_match_expression("absent", "some error message")
+    assert not evaluate_match_expression("absent", "0")
+    assert not evaluate_match_expression("absent", 0)
 
 
 # ── Payload path lookup ───────────────────────────────────────────────────

@@ -10,6 +10,11 @@ CHANGELOG.md
 .env
 .env.local
 
+# Research campaign output - contains LLM API keys in command-line logs
+# and per-server reports that we keep local-only.
+campaign_results/
+campaign_verify/
+
 # Python
 __pycache__/
 *.py[cod]

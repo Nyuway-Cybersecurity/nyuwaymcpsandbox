@@ -81,13 +81,26 @@ def _npm_install_on_host(source_path: "Path") -> None:
             "to detonation npm-transport MCP servers."
         )
 
-    result = subprocess.run(
-        [npm, "install", "--production", "--silent", "--ignore-scripts"],
-        cwd=str(source_path),
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    try:
+        result = subprocess.run(
+            [npm, "install", "--production", "--silent", "--ignore-scripts"],
+            cwd=str(source_path),
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except subprocess.TimeoutExpired:
+        # Some packages (e.g. those depending on playwright) pull hundreds of
+        # MB and exceed the timeout. Log and continue - the server will fail
+        # to start if critical deps are missing, which surfaces as parse_error.
+        import sys
+        print(
+            f"  [npm install] WARNING: timed out after 180s in {source_path} "
+            f"- continuing with partial node_modules",
+            file=sys.stderr,
+        )
+        return
+
     if result.returncode != 0:
         snippet = (result.stderr or result.stdout or "")[:400]
         raise RuntimeError(

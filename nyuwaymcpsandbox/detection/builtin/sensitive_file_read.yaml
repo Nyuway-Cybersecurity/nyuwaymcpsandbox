@@ -21,5 +21,11 @@ detection:
         # tools that receive a sensitive path as a node name or query string.
         name: regex:(?i)(read|get|fetch|open|load|access|view|cat|show|dump)_?(file|path|content|resource)|file_?(read|get|fetch|load|access|view|content)|read_?(resource|data|document)|get_?(resource|content|data)
         arguments: regex:(?i)(\/etc\/passwd|\/etc\/shadow|id_rsa|id_ed25519|\.ssh|\.env|\.netrc|Windows\\\\System32\\\\drivers\\\\etc\\\\hosts|NTDS\.dit|SAM|credentials\.json|\.aws\/credentials|\.azure|token_cache|Login Data|Cookies|keychain)
+        # Only fire when the call actually succeeded.  Servers that expose a
+        # tool like ``get_file_contents`` for a remote backend (GitLab repo
+        # files, S3 objects, etc.) will error out when an adversarial LLM
+        # prompt asks them to read ``/etc/passwd`` - no real file was
+        # touched, so the rule must not flag them as credential harvesters.
+        error: absent
   threshold:
     count: 1
